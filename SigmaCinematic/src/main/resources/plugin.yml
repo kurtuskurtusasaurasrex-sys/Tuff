@@ -1,0 +1,88 @@
+name: SigmaCinematic
+version: '${version}'
+main: com.sigmacinematic.SigmaCinematic
+api-version: '26.2'
+description: Cinematic & roleplay toolkit - fake names/skins, fake messages, easy tellraw, dimension teleports and YouTube music.
+website: https://github.com/kurtuskurtusasaurasrex-sys/Tuff
+
+commands:
+  sigmacinematic:
+    description: SigmaCinematic help and reload.
+    usage: /sigmacinematic [help|reload]
+    aliases: [scinematic, schelp]
+    permission: sigmacinematic.admin
+  scnick:
+    description: Change your name everywhere (tab, nametag, join/leave/death messages).
+    usage: /scnick <name|reset|style> [player]
+    aliases: [cnick, disguisename]
+    permission: sigmacinematic.admin
+  scskin:
+    description: Change your skin from a link or another player's name.
+    usage: /scskin <link|player|reset> [slim|classic] [player]
+    aliases: [cskin]
+    permission: sigmacinematic.admin
+  scwho:
+    description: Show who is really behind each fake name.
+    usage: /scwho [name]
+    aliases: [realname]
+    permission: sigmacinematic.admin
+  scfake:
+    description: Fake join, leave, death, kill, advancement, chat and command messages.
+    usage: /scfake <type> ...
+    aliases: [fake]
+    permission: sigmacinematic.admin
+  sctell:
+    description: Easy tellraw with colors, hover and click.
+    usage: /sctell <players|json> <message>
+    aliases: [ctell, easytellraw]
+    permission: sigmacinematic.admin
+  sctitle:
+    description: Show a title (and subtitle after |).
+    usage: /sctitle <players> <title> [| subtitle]
+    aliases: [ctitle]
+    permission: sigmacinematic.admin
+  scactionbar:
+    description: Show text above the hotbar.
+    usage: /scactionbar <players> <message>
+    aliases: [cactionbar]
+    permission: sigmacinematic.admin
+  scdim:
+    description: Teleport to the spawn of any dimension.
+    usage: /scdim <dimension|list> [players]
+    aliases: [dim, dimtp]
+    permission: sigmacinematic.admin
+  scmusic:
+    description: Play music from a YouTube link.
+    usage: /scmusic <play|loop|stop|list|delete|unload|status> ...
+    aliases: [cmusic, ytmusic]
+    permission: sigmacinematic.admin
+  scfreeze:
+    description: Freeze players in place (they can still look around).
+    usage: /scfreeze <players> [on|off]
+    aliases: [cfreeze]
+    permission: sigmacinematic.admin
+  scvanish:
+    description: Become invisible to everyone (camera mode).
+    usage: /scvanish [player]
+    aliases: [cvanish]
+    permission: sigmacinematic.admin
+  scblackout:
+    description: Fade players' screens to black.
+    usage: /scblackout <players> <seconds|off> [title | subtitle]
+    aliases: [cblackout, fadeblack]
+    permission: sigmacinematic.admin
+  sccountdown:
+    description: 3, 2, 1, Action! countdown on screen.
+    usage: /sccountdown <seconds> [players] [final text]
+    aliases: [ccountdown]
+    permission: sigmacinematic.admin
+  scsudo:
+    description: Make a player say something or run a command.
+    usage: /scsudo <player> <message|/command>
+    aliases: [csudo]
+    permission: sigmacinematic.admin
+
+permissions:
+  sigmacinematic.admin:
+    description: Use every SigmaCinematic command.
+    default: op

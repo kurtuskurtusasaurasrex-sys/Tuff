@@ -1,0 +1,59 @@
+# ============================================================
+#  SigmaCinematic - config
+#  Every command needs the permission "sigmacinematic.admin"
+#  (server operators have it automatically).
+# ============================================================
+
+skins:
+  # Skin links are turned into real Minecraft skins by MineSkin (free).
+  # Get an API key at https://account.mineskin.org/keys and paste it here.
+  # (Copying another player's skin with /scskin <name> works without a key.)
+  mineskin-api-key: ""
+  # Arm style used when you don't say slim/classic: classic (Steve) or slim (Alex)
+  default-variant: classic
+
+fake:
+  # When you fake an advancement for someone who is online, also pop the
+  # "Advancement Made!" toast on their screen like a real one.
+  advancement-toast: true
+
+titles:
+  # In ticks (20 ticks = 1 second)
+  fade-in: 10
+  stay: 70
+  fade-out: 20
+
+vanish:
+  # Show a fake "left the game" / "joined the game" when you /scvanish.
+  fake-messages: true
+
+music:
+  # yt-dlp downloads the audio. If it isn't installed, the plugin downloads
+  # the official standalone version into plugins/SigmaCinematic/bin/.
+  yt-dlp-path: "yt-dlp"
+  auto-download-yt-dlp: true
+  # ffmpeg converts the audio into the format Minecraft plays. It must be
+  # installed on the server machine (https://ffmpeg.org/download.html).
+  # Put the full path here if it isn't on the PATH.
+  ffmpeg-path: "ffmpeg"
+  # Longest song allowed, in seconds (0 = no limit).
+  max-duration-seconds: 900
+  # 0 = best quality / biggest download ... 10 = smallest. 4 is a good balance.
+  audio-quality: 4
+  # Which volume slider controls the music: master, music, record, ambient, voice...
+  # "record" = the "Jukebox/Note Blocks" slider (players rarely turn it off).
+  sound-category: record
+  volume: 1.0
+  # Message on the "download server resources?" screen.
+  prompt: "<light_purple>This server wants to play music for a cinematic scene."
+
+  # Players' games download each song from this built-in web server.
+  web-server:
+    enabled: true
+    bind-address: "0.0.0.0"
+    # This port must be open to players (like your Minecraft port).
+    port: 8163
+    # The address players' games use to reach the port above.
+    # "auto" = http://<your public IP>:<port>. If your host gives you a domain
+    # or a different external port, put it here, e.g. "http://play.myserver.com:8163"
+    public-url: "auto"
