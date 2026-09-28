@@ -28,7 +28,7 @@ final class FileHosts {
 
     static final List<String> DEFAULT_ORDER = List.of("litterbox", "uguu", "tmpfiles");
 
-    record Hosted(URI uri, long expiresAt) {
+    record Hosted(String host, URI uri, long expiresAt) {
     }
 
     private static final Pattern TITLE = Pattern.compile("<title>(.*?)</title>", Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
@@ -44,7 +44,10 @@ final class FileHosts {
     /** Uploads to the first host in {@code order} that accepts the file. */
     static Hosted upload(File file, List<String> order) throws IOException {
         List<String> errors = new ArrayList<>();
-        for (String host : order.isEmpty() ? DEFAULT_ORDER : order) {
+        if (order.isEmpty()) {
+            throw new IOException("no upload hosts left to try");
+        }
+        for (String host : order) {
             try {
                 return switch (host.toLowerCase(Locale.ROOT)) {
                     case "litterbox" -> litterbox(file);
@@ -66,7 +69,7 @@ final class FileHosts {
         if (!body.startsWith("https://")) {
             throw new IOException("unexpected reply " + shorten(body));
         }
-        return new Hosted(URI.create(body), expiresIn(Duration.ofHours(72)));
+        return new Hosted("litterbox", URI.create(body), expiresIn(Duration.ofHours(72)));
     }
 
     /** uguu.se - kept 3 hours. */
@@ -76,7 +79,7 @@ final class FileHosts {
         if (files == null || files.isEmpty() || !files.get(0).getAsJsonObject().has("url")) {
             throw new IOException("unexpected reply " + shorten(json.toString()));
         }
-        return new Hosted(URI.create(files.get(0).getAsJsonObject().get("url").getAsString()), expiresIn(Duration.ofHours(3)));
+        return new Hosted("uguu", URI.create(files.get(0).getAsJsonObject().get("url").getAsString()), expiresIn(Duration.ofHours(3)));
     }
 
     /** tmpfiles.org - kept 60 minutes. */
@@ -88,7 +91,7 @@ final class FileHosts {
         // The page link is https://tmpfiles.org/<id>/<name>; the raw file is under /dl/.
         String page = json.getAsJsonObject("data").get("url").getAsString().replace("http://", "https://");
         String direct = page.replaceFirst("^https://tmpfiles\\.org/", "https://tmpfiles.org/dl/");
-        return new Hosted(URI.create(direct), expiresIn(Duration.ofMinutes(60)));
+        return new Hosted("tmpfiles", URI.create(direct), expiresIn(Duration.ofMinutes(60)));
     }
 
     private static long expiresIn(Duration duration) {

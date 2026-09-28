@@ -69,6 +69,8 @@ public final class MusicManager implements Listener {
     /** File-host links per track id, when songs are uploaded instead of served by our web server. */
     private final Map<String, FileHosts.Hosted> uploads = new ConcurrentHashMap<>();
     private final Map<String, CompletableFuture<URI>> uploading = new ConcurrentHashMap<>();
+    /** Upload hosts players' games couldn't download from this session; skipped until restart or reload. */
+    private final Set<String> failedHosts = ConcurrentHashMap.newKeySet();
 
     /** Still usable for a fresh download (with 10 minutes to spare). */
     private static boolean fresh(FileHosts.Hosted hosted) {
@@ -177,6 +179,7 @@ public final class MusicManager implements Listener {
 
     public void reload() {
         tools.forget();
+        failedHosts.clear();
         warmUp();
         if (serverRunning) {
             resolveBaseUrl(plugin.getConfig().getInt("music.web-server.port", 8163));
@@ -318,7 +321,7 @@ public final class MusicManager implements Listener {
                         s.getInt("duration", -1), zip, PackBuilder.sha1(zip)));
                 String uploaded = s.getString("upload.url");
                 if (uploaded != null) {
-                    uploads.put(id, new FileHosts.Hosted(URI.create(uploaded), s.getLong("upload.expires")));
+                    uploads.put(id, new FileHosts.Hosted(s.getString("upload.host", "?"), URI.create(uploaded), s.getLong("upload.expires")));
                 }
             } catch (IOException ex) {
                 plugin.getLogger().warning("Music: skipping unreadable " + zip.getName());
@@ -334,6 +337,7 @@ public final class MusicManager implements Listener {
             yml.set(track.id() + ".duration", track.durationSeconds());
             FileHosts.Hosted upload = uploads.get(track.id());
             if (upload != null) {
+                yml.set(track.id() + ".upload.host", upload.host());
                 yml.set(track.id() + ".upload.url", upload.uri().toString());
                 yml.set(track.id() + ".upload.expires", upload.expiresAt());
             }
@@ -428,7 +432,7 @@ public final class MusicManager implements Listener {
             return CompletableFuture.completedFuture(URI.create(baseUrl + "/pack/" + track.id() + ".zip"));
         }
         FileHosts.Hosted upload = uploads.get(track.id());
-        if (upload != null && fresh(upload)) {
+        if (upload != null && fresh(upload) && !failedHosts.contains(upload.host())) {
             return CompletableFuture.completedFuture(upload.uri());
         }
         CompletableFuture<URI> future = new CompletableFuture<>();
@@ -441,7 +445,7 @@ public final class MusicManager implements Listener {
                 FileHosts.Hosted hosted = FileHosts.upload(track.pack(), uploadHosts());
                 uploads.put(track.id(), hosted);
                 saveIndex();
-                plugin.getLogger().info("Music: uploaded \"" + track.title() + "\" to " + hosted.uri().getHost());
+                plugin.getLogger().info("Music: uploaded \"" + track.title() + "\" to " + hosted.host() + " (" + hosted.uri() + ")");
                 future.complete(hosted.uri());
             } catch (Throwable ex) {
                 future.completeExceptionally(ex);
@@ -453,14 +457,20 @@ public final class MusicManager implements Listener {
     }
 
     private List<String> uploadHosts() {
-        List<String> hosts = plugin.getConfig().getStringList("music.upload-hosts");
-        return hosts.isEmpty() ? FileHosts.DEFAULT_ORDER : hosts;
+        List<String> hosts = new ArrayList<>(plugin.getConfig().getStringList("music.upload-hosts"));
+        if (hosts.isEmpty()) {
+            hosts.addAll(FileHosts.DEFAULT_ORDER);
+        }
+        hosts.removeIf(host -> failedHosts.contains(Text.lower(host)));
+        return hosts;
     }
 
     private void sendPack(CommandSender sender, Player player, Track track, boolean loop, URI uri) {
         UUID playerId = player.getUniqueId();
         ResourcePackInfo info = ResourcePackInfo.resourcePackInfo(track.packId(), uri, track.sha1());
         boolean selfHosted = baseUrl != null && uri.toString().startsWith(baseUrl);
+        FileHosts.Hosted upload = uploads.get(track.id());
+        String uploadHost = !selfHosted && upload != null && upload.uri().equals(uri) ? upload.host() : null;
         ResourcePackRequest request = ResourcePackRequest.resourcePackRequest()
                 .packs(info)
                 .replace(false)
@@ -468,9 +478,9 @@ public final class MusicManager implements Listener {
                 .prompt(Text.parse(plugin.getConfig().getString("music.prompt", "Music for this scene")))
                 .callback((id, status, audience) -> {
                     if (Bukkit.isPrimaryThread()) {
-                        onStatus(sender, playerId, track, loop, status, selfHosted);
+                        onStatus(sender, playerId, track, loop, status, selfHosted, uploadHost);
                     } else {
-                        Bukkit.getScheduler().runTask(plugin, () -> onStatus(sender, playerId, track, loop, status, selfHosted));
+                        Bukkit.getScheduler().runTask(plugin, () -> onStatus(sender, playerId, track, loop, status, selfHosted, uploadHost));
                     }
                 })
                 .build();
@@ -478,7 +488,7 @@ public final class MusicManager implements Listener {
     }
 
     private void onStatus(CommandSender sender, UUID playerId, Track track, boolean loop, ResourcePackStatus status,
-                          boolean selfHosted) {
+                          boolean selfHosted, String uploadHost) {
         Player player = Bukkit.getPlayer(playerId);
         String name = player == null ? "A player" : player.getName();
         switch (status) {
@@ -514,10 +524,28 @@ public final class MusicManager implements Listener {
                                     + "music.web-server.public-url, or set music.pack-host: auto in config.yml.",
                             Text.arg("name", name), Text.arg("url", String.valueOf(baseUrl)));
                 } else {
-                    // That upload may have expired or the host may be having trouble: forget it so the next play re-uploads.
+                    // Players can't download from this host (it may block games, or be down): stop using it and try the next one.
                     uploads.remove(track.id());
-                    Text.error(sender, "<name>'s game couldn't download the song from the file host. Try playing it again.",
-                            Text.arg("name", name));
+                    if (uploadHost != null && failedHosts.add(uploadHost)) {
+                        plugin.getLogger().warning("Music: players couldn't download from " + uploadHost + " - skipping it from now on.");
+                    }
+                    if (player != null && !uploadHosts().isEmpty()) {
+                        Text.send(sender, "<gray><name>'s game couldn't download from <host>, trying <next>...",
+                                Text.arg("name", name), Text.arg("host", uploadHost == null ? "that host" : uploadHost),
+                                Text.arg("next", uploadHosts().get(0)));
+                        packUri(track).whenComplete((uri, error) -> Bukkit.getScheduler().runTask(plugin, () -> {
+                            if (error != null) {
+                                Throwable cause = error.getCause() != null ? error.getCause() : error;
+                                Text.error(sender, "Could not upload the song: <why>", Text.arg("why", String.valueOf(cause.getMessage())));
+                            } else if (player.isOnline()) {
+                                sendPack(sender, player, track, loop, uri);
+                            }
+                        }));
+                    } else {
+                        Text.error(sender, "<name>'s game couldn't download the song from any upload host. Check "
+                                + ".minecraft/logs/latest.log on their computer for the reason (search for \"resource pack\").",
+                                Text.arg("name", name));
+                    }
                 }
             }
             case FAILED_RELOAD, DISCARDED -> Text.error(sender, "<name>'s game failed to load the song.", Text.arg("name", name));
