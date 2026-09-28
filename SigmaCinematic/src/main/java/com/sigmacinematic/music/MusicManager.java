@@ -78,6 +78,8 @@ public final class MusicManager implements Listener {
 
     private volatile String baseUrl;
     private volatile boolean serverRunning;
+    /** In "auto" mode: the web address players couldn't reach, so we upload instead while it stays the same. */
+    private volatile String unreachableUrl;
 
     public MusicManager(SigmaCinematic plugin) {
         this.plugin = plugin;
@@ -95,13 +97,15 @@ public final class MusicManager implements Listener {
     public void start() {
         dir.mkdirs();
         loadIndex();
+        unreachableUrl = YamlConfiguration.loadConfiguration(stateFile()).getString("unreachable-url");
         warmUp();
-        if (uploadMode()) {
+        if (hostSetting().equals("litterbox")) {
             plugin.getLogger().info("Music packs will be uploaded to litterbox.catbox.moe (music.pack-host: litterbox).");
             return;
         }
         if (!plugin.getConfig().getBoolean("music.web-server.enabled", true)) {
-            plugin.getLogger().warning("music.web-server.enabled is false and pack-host is self - /scmusic will not work.");
+            plugin.getLogger().warning("music.web-server.enabled is false"
+                    + (hostSetting().equals("self") ? " and pack-host is self - /scmusic will not work." : " - songs will be uploaded instead."));
             return;
         }
         String bind = plugin.getConfig().getString("music.web-server.bind-address", "0.0.0.0");
@@ -128,8 +132,33 @@ public final class MusicManager implements Listener {
         });
     }
 
+    private String hostSetting() {
+        String setting = Text.lower(plugin.getConfig().getString("music.pack-host", "auto"));
+        return setting.equals("self") || setting.equals("litterbox") ? setting : "auto";
+    }
+
+    /** True when songs should be uploaded to litterbox rather than served by our own web server. */
     private boolean uploadMode() {
-        return plugin.getConfig().getString("music.pack-host", "self").equalsIgnoreCase("litterbox");
+        return switch (hostSetting()) {
+            case "litterbox" -> true;
+            case "self" -> false;
+            default -> !serverRunning || (unreachableUrl != null && unreachableUrl.equals(baseUrl));
+        };
+    }
+
+    private File stateFile() {
+        return new File(dir, "state.yml");
+    }
+
+    private void rememberUnreachable(String url) {
+        unreachableUrl = url;
+        YamlConfiguration yml = new YamlConfiguration();
+        yml.set("unreachable-url", url);
+        try {
+            yml.save(stateFile());
+        } catch (IOException ex) {
+            plugin.getLogger().log(Level.WARNING, "Could not save music/state.yml", ex);
+        }
     }
 
     public void shutdown() {
@@ -317,7 +346,8 @@ public final class MusicManager implements Listener {
 
     public String status() {
         if (uploadMode()) {
-            return "packs are uploaded to litterbox.catbox.moe";
+            return "songs are uploaded to litterbox.catbox.moe"
+                    + (hostSetting().equals("auto") && serverRunning ? " (players couldn't reach " + baseUrl + ")" : "");
         }
         if (!serverRunning) {
             return "web server is OFF (see console)";
@@ -421,6 +451,7 @@ public final class MusicManager implements Listener {
     private void sendPack(CommandSender sender, Player player, Track track, boolean loop, URI uri) {
         UUID playerId = player.getUniqueId();
         ResourcePackInfo info = ResourcePackInfo.resourcePackInfo(track.packId(), uri, track.sha1());
+        boolean selfHosted = baseUrl != null && uri.toString().startsWith(baseUrl);
         ResourcePackRequest request = ResourcePackRequest.resourcePackRequest()
                 .packs(info)
                 .replace(false)
@@ -428,16 +459,17 @@ public final class MusicManager implements Listener {
                 .prompt(Text.parse(plugin.getConfig().getString("music.prompt", "Music for this scene")))
                 .callback((id, status, audience) -> {
                     if (Bukkit.isPrimaryThread()) {
-                        onStatus(sender, playerId, track, loop, status);
+                        onStatus(sender, playerId, track, loop, status, selfHosted);
                     } else {
-                        Bukkit.getScheduler().runTask(plugin, () -> onStatus(sender, playerId, track, loop, status));
+                        Bukkit.getScheduler().runTask(plugin, () -> onStatus(sender, playerId, track, loop, status, selfHosted));
                     }
                 })
                 .build();
         player.sendResourcePacks(request);
     }
 
-    private void onStatus(CommandSender sender, UUID playerId, Track track, boolean loop, ResourcePackStatus status) {
+    private void onStatus(CommandSender sender, UUID playerId, Track track, boolean loop, ResourcePackStatus status,
+                          boolean selfHosted) {
         Player player = Bukkit.getPlayer(playerId);
         String name = player == null ? "A player" : player.getName();
         switch (status) {
@@ -449,11 +481,34 @@ public final class MusicManager implements Listener {
             }
             case DECLINED -> Text.error(sender, "<name> has server resource packs disabled, so they can't hear music "
                     + "(Multiplayer > Edit server > Server Resource Packs: Enabled).", Text.arg("name", name));
-            case FAILED_DOWNLOAD, INVALID_URL -> Text.error(sender, uploadMode()
-                            ? "<name>'s game couldn't download the song from litterbox. Try again in a moment."
-                            : "<name>'s game couldn't download the song from <url>. Make sure that port is open (on Seedloaf: "
-                            + "Additional Ports), set music.web-server.public-url, or set music.pack-host: litterbox in config.yml.",
-                    Text.arg("name", name), Text.arg("url", String.valueOf(baseUrl)));
+            case FAILED_DOWNLOAD, INVALID_URL -> {
+                if (selfHosted && hostSetting().equals("auto")) {
+                    // The music port isn't reachable from the internet (common on free hosts): upload instead, and remember that.
+                    if (!uploadMode()) {
+                        plugin.getLogger().warning("Music: players can't reach " + baseUrl
+                                + " - switching to uploading songs to litterbox.catbox.moe.");
+                        rememberUnreachable(baseUrl);
+                        Text.send(sender, "<gray>Players can't reach the music port, so songs will be uploaded instead. Retrying...");
+                    }
+                    if (player != null) {
+                        packUri(track).whenComplete((uri, error) -> Bukkit.getScheduler().runTask(plugin, () -> {
+                            if (error != null) {
+                                Throwable cause = error.getCause() != null ? error.getCause() : error;
+                                Text.error(sender, "Could not upload the song: <why>", Text.arg("why", String.valueOf(cause.getMessage())));
+                            } else if (player.isOnline()) {
+                                sendPack(sender, player, track, loop, uri);
+                            }
+                        }));
+                    }
+                } else if (selfHosted) {
+                    Text.error(sender, "<name>'s game couldn't download the song from <url>. Open that port, set "
+                                    + "music.web-server.public-url, or set music.pack-host: auto in config.yml.",
+                            Text.arg("name", name), Text.arg("url", String.valueOf(baseUrl)));
+                } else {
+                    Text.error(sender, "<name>'s game couldn't download the song from litterbox. Try again in a moment.",
+                            Text.arg("name", name));
+                }
+            }
             case FAILED_RELOAD, DISCARDED -> Text.error(sender, "<name>'s game failed to load the song.", Text.arg("name", name));
             default -> {
                 // accepted / downloaded: still in progress

@@ -56,19 +56,20 @@ music:
   prompt: "<light_purple>This server wants to play music for a cinematic scene."
 
   # Where players' games download each song from:
-  #   self      - the plugin's own web server (needs an extra open port, see web-server below)
-  #   litterbox - uploads each song to litterbox.catbox.moe, a free temporary file host.
+  #   auto      - use the plugin's own web server; if players can't reach it (the port isn't
+  #               open, common on free hosts like Seedloaf), switch to litterbox automatically.
+  #   self      - only the plugin's own web server (needs an open port, see web-server below)
+  #   litterbox - upload each song to litterbox.catbox.moe, a free temporary file host.
   #               No port needed. Uploads expire after 3 days and are redone automatically.
-  #               Use this if players get "couldn't download the song" with "self".
-  pack-host: self
+  pack-host: auto
 
-  # Only used when pack-host is "self".
+  # Only used when pack-host is "auto" or "self".
   web-server:
     enabled: true
     bind-address: "0.0.0.0"
     port: 8163
     # The address players' games use to reach the port above.
     # "auto" = http://<your public IP>:<port>.
-    # SEEDLOAF: in your dashboard open "Additional Ports", add 8163, and paste the
-    # address it gives you here, e.g. "http://ns123456.seedloaf.com:49901"
+    # SEEDLOAF: you can leave this alone - with pack-host: auto the plugin switches to
+    # uploading songs when the port isn't reachable.
     public-url: "auto"

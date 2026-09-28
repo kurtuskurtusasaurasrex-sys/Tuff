@@ -109,11 +109,11 @@ instant. It also works with SoundCloud, Bandcamp, direct `.mp3` links and most o
 1. **Nothing to install.** yt-dlp, ffmpeg and deno (which yt-dlp needs for YouTube) are
    downloaded automatically into `plugins/SigmaCinematic/bin/` the first time the server starts.
    They take about 200 MB. Watch the console for `Music: ffmpeg is ready.` and the other tools.
-2. **Let players download the songs.** Pick one option:
-   - **Own web server (default):** open **port 8163** (TCP) and, if needed, set
-     `music.web-server.public-url` to the address players can reach.
-   - **No extra port:** set `music.pack-host: litterbox`. Songs are uploaded to the free file host
-     litterbox.catbox.moe instead. Uploads expire after 3 days and are redone automatically.
+2. **Let players download the songs.** With the default `music.pack-host: auto`, the plugin serves
+   songs from its own web server on **port 8163**. If players can't reach that port, it
+   automatically switches to uploading songs to the free file host litterbox.catbox.moe, where
+   uploads expire after 3 days and are redone automatically. You can force either option with
+   `pack-host: self` or `pack-host: litterbox`.
 3. Players must have *Server Resource Packs* set to **Enabled** or **Prompt**
    (Multiplayer → select server → Edit). The plugin tells you if someone has them disabled.
 
@@ -144,18 +144,10 @@ aren't affected by this block.
    skins:
      mineskin-api-key: "msk_..."
    ```
-4. **Music:**
-   1. In the Seedloaf dashboard, open **Additional Ports** and add port **8163**.
-   2. Seedloaf shows the address it's exposed on, like `ns123456.seedloaf.com:49901`. Put that in
-      `config.yml`:
-      ```yaml
-      music:
-        web-server:
-          public-url: "http://ns123456.seedloaf.com:49901"
-      ```
-   3. Restart the server and try `/scmusic play <link>`.
-   4. If players get *"couldn't download the song"*, Seedloaf's extra port isn't passing web
-      traffic. Set `music.pack-host: litterbox` instead, and then you don't need the extra port.
+4. **Music:** nothing to set up. The first time you play a song, the plugin tries its own music
+   port. Seedloaf doesn't open that port, so the plugin notices, switches to uploading songs to
+   litterbox, and remembers that for next time. To skip that first try, set
+   `music.pack-host: litterbox` in `config.yml`.
 5. Seedloaf stops the server when nobody is online. The plugin's downloaded tools, songs and
    disguises are saved in `plugins/SigmaCinematic/`, so they stay across restarts.
 
