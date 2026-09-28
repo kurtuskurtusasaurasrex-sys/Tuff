@@ -6,7 +6,8 @@
 
 skins:
   # Skin links are turned into real Minecraft skins by MineSkin (free).
-  # Get an API key at https://account.mineskin.org/keys and paste it here.
+  # Get an API key at https://account.mineskin.org/keys and paste it here
+  # (it starts with msk_). Keep it private - don't post it publicly.
   # (Copying another player's skin with /scskin <name> works without a key.)
   mineskin-api-key: ""
   # Arm style used when you don't say slim/classic: classic (Steve) or slim (Alex)
@@ -28,17 +29,24 @@ vanish:
   fake-messages: true
 
 music:
-  # yt-dlp downloads the audio. If it isn't installed, the plugin downloads
-  # the official standalone version into plugins/SigmaCinematic/bin/.
+  # The tools below turn a link into a song. Anything missing is downloaded
+  # automatically into plugins/SigmaCinematic/bin (about 200 MB), so this works
+  # on hosts where you can't install programs, like Seedloaf.
+  #   yt-dlp - downloads the audio from YouTube and most other sites
+  #   deno   - lets yt-dlp read YouTube
+  #   ffmpeg - converts the audio into the format Minecraft plays
+  auto-download-tools: true
   yt-dlp-path: "yt-dlp"
-  auto-download-yt-dlp: true
-  # ffmpeg converts the audio into the format Minecraft plays. It must be
-  # installed on the server machine (https://ffmpeg.org/download.html).
-  # Put the full path here if it isn't on the PATH.
   ffmpeg-path: "ffmpeg"
+
+  # YouTube sometimes blocks hosting companies ("Sign in to confirm you're not a bot").
+  # If that happens, export your YouTube cookies (see the README), upload the file
+  # to plugins/SigmaCinematic/ and put its name here, e.g. "cookies.txt".
+  cookies-file: ""
+
   # Longest song allowed, in seconds (0 = no limit).
   max-duration-seconds: 900
-  # 0 = best quality / biggest download ... 10 = smallest. 4 is a good balance.
+  # 0 = smallest file ... 10 = best quality. 4 is about 128 kbps.
   audio-quality: 4
   # Which volume slider controls the music: master, music, record, ambient, voice...
   # "record" = the "Jukebox/Note Blocks" slider (players rarely turn it off).
@@ -47,13 +55,20 @@ music:
   # Message on the "download server resources?" screen.
   prompt: "<light_purple>This server wants to play music for a cinematic scene."
 
-  # Players' games download each song from this built-in web server.
+  # Where players' games download each song from:
+  #   self      - the plugin's own web server (needs an extra open port, see web-server below)
+  #   litterbox - uploads each song to litterbox.catbox.moe, a free temporary file host.
+  #               No port needed. Uploads expire after 3 days and are redone automatically.
+  #               Use this if players get "couldn't download the song" with "self".
+  pack-host: self
+
+  # Only used when pack-host is "self".
   web-server:
     enabled: true
     bind-address: "0.0.0.0"
-    # This port must be open to players (like your Minecraft port).
     port: 8163
     # The address players' games use to reach the port above.
-    # "auto" = http://<your public IP>:<port>. If your host gives you a domain
-    # or a different external port, put it here, e.g. "http://play.myserver.com:8163"
+    # "auto" = http://<your public IP>:<port>.
+    # SEEDLOAF: in your dashboard open "Additional Ports", add 8163, and paste the
+    # address it gives you here, e.g. "http://ns123456.seedloaf.com:49901"
     public-url: "auto"

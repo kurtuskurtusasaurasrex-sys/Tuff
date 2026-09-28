@@ -46,8 +46,8 @@ import java.util.logging.Level;
 /**
  * Plays music from YouTube (or any site yt-dlp supports) to vanilla clients.
  *
- * <p>How it works: yt-dlp downloads the audio and converts it to Ogg Vorbis, the song is wrapped in
- * a tiny resource pack, the built-in web server hands that pack to each listener's game, and once
+ * <p>How it works: yt-dlp downloads the audio, ffmpeg converts it to Ogg Vorbis, the song is wrapped in
+ * a tiny resource pack, the built-in web server (or litterbox) hands that pack to each listener's game, and once
  * their game has loaded it the plugin plays it as a normal sound. Songs are cached, so replays are instant.
  */
 public final class MusicManager implements Listener {
@@ -58,7 +58,7 @@ public final class MusicManager implements Listener {
     private final SigmaCinematic plugin;
     private final File dir;
     private final File indexFile;
-    private final YtDlp ytdlp;
+    private final AudioTools tools;
     private final PackServer server;
 
     private final Map<String, Track> tracks = Collections.synchronizedMap(new LinkedHashMap<>());
@@ -66,6 +66,15 @@ public final class MusicManager implements Listener {
     /** Main thread only. */
     private final Map<UUID, Set<UUID>> loadedPacks = new HashMap<>();
     private final Map<UUID, Playing> playing = new HashMap<>();
+    /** Litterbox links per track id, when pack-host is litterbox. */
+    private final Map<String, Upload> uploads = new ConcurrentHashMap<>();
+    private final Map<String, CompletableFuture<URI>> uploading = new ConcurrentHashMap<>();
+
+    private record Upload(URI uri, long uploadedAt) {
+        boolean fresh() {
+            return System.currentTimeMillis() - uploadedAt < Litterbox.LIFETIME.minusHours(2).toMillis();
+        }
+    }
 
     private volatile String baseUrl;
     private volatile boolean serverRunning;
@@ -74,7 +83,7 @@ public final class MusicManager implements Listener {
         this.plugin = plugin;
         this.dir = new File(plugin.getDataFolder(), "music");
         this.indexFile = new File(dir, "tracks.yml");
-        this.ytdlp = new YtDlp(plugin);
+        this.tools = new AudioTools(plugin);
         this.server = new PackServer(id -> {
             Track track = tracks.get(id);
             return track == null ? null : track.pack();
@@ -86,8 +95,13 @@ public final class MusicManager implements Listener {
     public void start() {
         dir.mkdirs();
         loadIndex();
+        warmUp();
+        if (uploadMode()) {
+            plugin.getLogger().info("Music packs will be uploaded to litterbox.catbox.moe (music.pack-host: litterbox).");
+            return;
+        }
         if (!plugin.getConfig().getBoolean("music.web-server.enabled", true)) {
-            plugin.getLogger().warning("music.web-server.enabled is false - /scmusic will not work.");
+            plugin.getLogger().warning("music.web-server.enabled is false and pack-host is self - /scmusic will not work.");
             return;
         }
         String bind = plugin.getConfig().getString("music.web-server.bind-address", "0.0.0.0");
@@ -101,14 +115,21 @@ public final class MusicManager implements Listener {
             return;
         }
         resolveBaseUrl(port);
-        // Warm up yt-dlp in the background so the first /scmusic play is quicker.
+    }
+
+    /** Gets yt-dlp, ffmpeg and deno ready in the background so the first /scmusic play is quicker. */
+    private void warmUp() {
         plugin.async().execute(() -> {
             try {
-                ytdlp.executable();
+                tools.prepare();
             } catch (IOException ex) {
                 plugin.getLogger().warning("Music: " + ex.getMessage());
             }
         });
+    }
+
+    private boolean uploadMode() {
+        return plugin.getConfig().getString("music.pack-host", "self").equalsIgnoreCase("litterbox");
     }
 
     public void shutdown() {
@@ -123,7 +144,8 @@ public final class MusicManager implements Listener {
     }
 
     public void reload() {
-        ytdlp.forget();
+        tools.forget();
+        warmUp();
         if (serverRunning) {
             resolveBaseUrl(plugin.getConfig().getInt("music.web-server.port", 8163));
         }
@@ -192,6 +214,7 @@ public final class MusicManager implements Listener {
 
     public boolean delete(Track track) {
         tracks.remove(track.id());
+        uploads.remove(track.id());
         saveIndex();
         return track.pack().delete();
     }
@@ -215,7 +238,7 @@ public final class MusicManager implements Listener {
     }
 
     private Track fetch(String url) throws IOException {
-        YtDlp.Meta meta = ytdlp.metadata(url);
+        AudioTools.Meta meta = tools.metadata(url);
         int max = plugin.getConfig().getInt("music.max-duration-seconds", 900);
         if (max > 0 && meta.durationSeconds() > max) {
             throw new IOException("That is " + (meta.durationSeconds() / 60) + " minutes long; the limit is "
@@ -226,14 +249,15 @@ public final class MusicManager implements Listener {
         if (cached != null && cached.pack().isFile()) {
             return cached;
         }
-        File ogg = ytdlp.downloadAudio(url, dir, id);
+        File ogg = tools.downloadAudio(url, dir, id);
+        int duration = meta.durationSeconds() > 0 ? meta.durationSeconds() : tools.probeDuration(ogg);
         File zip = new File(dir, id + ".zip");
         try {
             PackBuilder.build(id, meta.title(), ogg, zip);
         } finally {
             ogg.delete();
         }
-        Track track = new Track(id, meta.title(), url, meta.durationSeconds(), zip, PackBuilder.sha1(zip));
+        Track track = new Track(id, meta.title(), url, duration, zip, PackBuilder.sha1(zip));
         tracks.put(id, track);
         saveIndex();
         plugin.getLogger().info("Music: cached \"" + meta.title() + "\" (" + zip.length() / 1024 + " KB)");
@@ -260,6 +284,10 @@ public final class MusicManager implements Listener {
             try {
                 tracks.put(id, new Track(id, s.getString("title", id), s.getString("url", ""),
                         s.getInt("duration", -1), zip, PackBuilder.sha1(zip)));
+                String uploaded = s.getString("upload.url");
+                if (uploaded != null) {
+                    uploads.put(id, new Upload(URI.create(uploaded), s.getLong("upload.time")));
+                }
             } catch (IOException ex) {
                 plugin.getLogger().warning("Music: skipping unreadable " + zip.getName());
             }
@@ -272,6 +300,11 @@ public final class MusicManager implements Listener {
             yml.set(track.id() + ".title", track.title());
             yml.set(track.id() + ".url", track.url());
             yml.set(track.id() + ".duration", track.durationSeconds());
+            Upload upload = uploads.get(track.id());
+            if (upload != null) {
+                yml.set(track.id() + ".upload.url", upload.uri().toString());
+                yml.set(track.id() + ".upload.time", upload.uploadedAt());
+            }
         }
         try {
             yml.save(indexFile);
@@ -283,6 +316,9 @@ public final class MusicManager implements Listener {
     // ---------------------------------------------------------------- playback
 
     public String status() {
+        if (uploadMode()) {
+            return "packs are uploaded to litterbox.catbox.moe";
+        }
         if (!serverRunning) {
             return "web server is OFF (see console)";
         }
@@ -291,7 +327,7 @@ public final class MusicManager implements Listener {
 
     /** Plays a link (or a cached song) to the given players. Call on the main thread. */
     public void play(CommandSender sender, String input, List<Player> targets, boolean loop) {
-        if (!serverRunning || baseUrl == null) {
+        if (!uploadMode() && (!serverRunning || baseUrl == null)) {
             Text.error(sender, "Music is unavailable: <why>.", Text.arg("why", status()));
             return;
         }
@@ -324,14 +360,28 @@ public final class MusicManager implements Listener {
     }
 
     private void start(CommandSender sender, Track track, List<Player> targets, boolean loop) {
-        int loading = 0;
+        List<Player> needPack = new ArrayList<>();
         for (Player player : targets) {
             if (loadedPacks.getOrDefault(player.getUniqueId(), Set.of()).contains(track.packId())) {
                 begin(player, track, loop);
             } else {
-                sendPack(sender, player, track, loop);
-                loading++;
+                needPack.add(player);
             }
+        }
+        int loading = needPack.size();
+        if (!needPack.isEmpty()) {
+            packUri(track).whenComplete((uri, error) -> Bukkit.getScheduler().runTask(plugin, () -> {
+                if (error != null) {
+                    Throwable cause = error.getCause() != null ? error.getCause() : error;
+                    Text.error(sender, "Could not host the song for players: <why>", Text.arg("why", String.valueOf(cause.getMessage())));
+                    return;
+                }
+                for (Player player : needPack) {
+                    if (player.isOnline()) {
+                        sendPack(sender, player, track, loop, uri);
+                    }
+                }
+            }));
         }
         Text.ok(sender, "<light_purple>♪</light_purple> <white><title></white> <gray>[<time>]</gray> for <count> player(s)"
                         + (loop ? " <gray>(looping)</gray>" : "") + (loading > 0 ? " <gray>- <loading> loading it first</gray>" : ""),
@@ -339,10 +389,38 @@ public final class MusicManager implements Listener {
                 Text.arg("count", targets.size()), Text.arg("loading", loading));
     }
 
-    private void sendPack(CommandSender sender, Player player, Track track, boolean loop) {
+    /** Where players' games download this song's pack from: our own web server, or a litterbox upload. */
+    private CompletableFuture<URI> packUri(Track track) {
+        if (!uploadMode()) {
+            return CompletableFuture.completedFuture(URI.create(baseUrl + "/pack/" + track.id() + ".zip"));
+        }
+        Upload upload = uploads.get(track.id());
+        if (upload != null && upload.fresh()) {
+            return CompletableFuture.completedFuture(upload.uri());
+        }
+        CompletableFuture<URI> future = new CompletableFuture<>();
+        CompletableFuture<URI> existing = uploading.putIfAbsent(track.id(), future);
+        if (existing != null) {
+            return existing;
+        }
+        plugin.async().execute(() -> {
+            try {
+                URI uri = Litterbox.upload(track.pack());
+                uploads.put(track.id(), new Upload(uri, System.currentTimeMillis()));
+                saveIndex();
+                future.complete(uri);
+            } catch (Throwable ex) {
+                future.completeExceptionally(ex);
+            } finally {
+                uploading.remove(track.id(), future);
+            }
+        });
+        return future;
+    }
+
+    private void sendPack(CommandSender sender, Player player, Track track, boolean loop, URI uri) {
         UUID playerId = player.getUniqueId();
-        ResourcePackInfo info = ResourcePackInfo.resourcePackInfo(track.packId(),
-                URI.create(baseUrl + "/pack/" + track.id() + ".zip"), track.sha1());
+        ResourcePackInfo info = ResourcePackInfo.resourcePackInfo(track.packId(), uri, track.sha1());
         ResourcePackRequest request = ResourcePackRequest.resourcePackRequest()
                 .packs(info)
                 .replace(false)
@@ -371,9 +449,11 @@ public final class MusicManager implements Listener {
             }
             case DECLINED -> Text.error(sender, "<name> has server resource packs disabled, so they can't hear music "
                     + "(Multiplayer > Edit server > Server Resource Packs: Enabled).", Text.arg("name", name));
-            case FAILED_DOWNLOAD, INVALID_URL -> Text.error(sender, "<name>'s game couldn't download the song from <url>. "
-                            + "Make sure that port is open, or set music.web-server.public-url in config.yml.",
-                    Text.arg("name", name), Text.arg("url", baseUrl));
+            case FAILED_DOWNLOAD, INVALID_URL -> Text.error(sender, uploadMode()
+                            ? "<name>'s game couldn't download the song from litterbox. Try again in a moment."
+                            : "<name>'s game couldn't download the song from <url>. Make sure that port is open (on Seedloaf: "
+                            + "Additional Ports), set music.web-server.public-url, or set music.pack-host: litterbox in config.yml.",
+                    Text.arg("name", name), Text.arg("url", String.valueOf(baseUrl)));
             case FAILED_RELOAD, DISCARDED -> Text.error(sender, "<name>'s game failed to load the song.", Text.arg("name", name));
             default -> {
                 // accepted / downloaded: still in progress

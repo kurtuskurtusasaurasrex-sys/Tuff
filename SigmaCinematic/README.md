@@ -99,25 +99,65 @@ out of lava and not inside walls. In the End you land on the vanilla obsidian pl
 /scmusic status
 ```
 
-How it works: the plugin downloads the audio with **yt-dlp**, converts it with **ffmpeg** into the
-format Minecraft plays, and wraps each song in a tiny resource pack. A small web server built into
-the plugin hands that pack to each player's game, and then the song plays like a normal sound.
-Songs are cached, so playing one again is instant. It also works with SoundCloud, Bandcamp, direct
-`.mp3` links and most other sites yt-dlp supports.
+How it works: **yt-dlp** downloads the audio, **ffmpeg** converts it into the format Minecraft
+plays, and the plugin wraps each song in a tiny resource pack. Each player's game downloads that
+pack, and then the song plays like a normal sound. Songs are cached, so playing one again is
+instant. It also works with SoundCloud, Bandcamp, direct `.mp3` links and most other sites.
 
 ### Music setup
 
-1. **ffmpeg** must be installed on the server machine (https://ffmpeg.org/download.html).
-   On Linux: `sudo apt install ffmpeg`. On Windows, set `music.ffmpeg-path` in `config.yml` to where `ffmpeg.exe` is.
-2. **yt-dlp** is downloaded automatically the first time. You can also install it yourself.
-3. **Open port 8163** (TCP) on your server/firewall, just like your Minecraft port, or change
-   `music.web-server.port`. If your host gives you a domain or maps the port to a different one,
-   set `music.web-server.public-url`, for example `http://play.myserver.com:25580`.
-4. Players must have *Server Resource Packs* set to **Enabled** or **Prompt**
+1. **Nothing to install.** yt-dlp, ffmpeg and deno (which yt-dlp needs for YouTube) are
+   downloaded automatically into `plugins/SigmaCinematic/bin/` the first time the server starts.
+   They take about 200 MB. Watch the console for `Music: ffmpeg is ready.` and the other tools.
+2. **Let players download the songs.** Pick one option:
+   - **Own web server (default):** open **port 8163** (TCP) and, if needed, set
+     `music.web-server.public-url` to the address players can reach.
+   - **No extra port:** set `music.pack-host: litterbox`. Songs are uploaded to the free file host
+     litterbox.catbox.moe instead. Uploads expire after 3 days and are redone automatically.
+3. Players must have *Server Resource Packs* set to **Enabled** or **Prompt**
    (Multiplayer → select server → Edit). The plugin tells you if someone has them disabled.
 
 The music plays on the **Jukebox/Note Blocks** volume slider by default. You can change this with
 `music.sound-category`.
+
+### If YouTube says "Sign in to confirm you're not a bot"
+
+YouTube sometimes blocks servers run by hosting companies. To fix it:
+
+1. In your browser, open a private/incognito window and log in to YouTube. A spare Google account
+   is safest.
+2. Use a cookies exporter extension, such as "Get cookies.txt LOCALLY", to export your
+   `youtube.com` cookies to a file named `cookies.txt`, then close the private window.
+3. Upload `cookies.txt` to `plugins/SigmaCinematic/` and set `music.cookies-file: cookies.txt`.
+4. Run `/sigmacinematic reload`.
+
+Anyone with that file can use the account, so keep it private. SoundCloud and direct `.mp3` links
+aren't affected by this block.
+
+## Setting it up on Seedloaf
+
+1. Make sure your server is running **Paper 26.2**.
+2. In the **File Manager**, upload `SigmaCinematic-1.0.0.jar` into the `plugins` folder, then
+   start the server once. This creates `plugins/SigmaCinematic/config.yml`.
+3. **Skins:** open `plugins/SigmaCinematic/config.yml` and paste your MineSkin key:
+   ```yaml
+   skins:
+     mineskin-api-key: "msk_..."
+   ```
+4. **Music:**
+   1. In the Seedloaf dashboard, open **Additional Ports** and add port **8163**.
+   2. Seedloaf shows the address it's exposed on, like `ns123456.seedloaf.com:49901`. Put that in
+      `config.yml`:
+      ```yaml
+      music:
+        web-server:
+          public-url: "http://ns123456.seedloaf.com:49901"
+      ```
+   3. Restart the server and try `/scmusic play <link>`.
+   4. If players get *"couldn't download the song"*, Seedloaf's extra port isn't passing web
+      traffic. Set `music.pack-host: litterbox` instead, and then you don't need the extra port.
+5. Seedloaf stops the server when nobody is online. The plugin's downloaded tools, songs and
+   disguises are saved in `plugins/SigmaCinematic/`, so they stay across restarts.
 
 ## Filming tools
 
