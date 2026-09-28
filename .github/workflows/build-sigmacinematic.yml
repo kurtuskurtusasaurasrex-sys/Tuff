@@ -10,6 +10,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     defaults:
       run:
         working-directory: SigmaCinematic
@@ -33,3 +35,17 @@ jobs:
         with:
           name: SigmaCinematic
           path: SigmaCinematic/build/libs/*.jar
+
+      # Publishes the jar as a direct download link (no GitHub login needed):
+      # https://github.com/<owner>/<repo>/releases/download/sigmacinematic-latest/SigmaCinematic.jar
+      - name: Publish download link
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp build/libs/SigmaCinematic-*.jar SigmaCinematic.jar
+          gh release delete sigmacinematic-latest --yes --cleanup-tag || true
+          gh release create sigmacinematic-latest SigmaCinematic.jar \
+            --target "$GITHUB_SHA" \
+            --title "SigmaCinematic (latest build)" \
+            --notes "Latest SigmaCinematic build for Paper 26.2. Put SigmaCinematic.jar in your server's plugins folder."
