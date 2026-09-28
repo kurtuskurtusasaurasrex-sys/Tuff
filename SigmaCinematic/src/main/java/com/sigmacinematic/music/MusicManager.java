@@ -47,7 +47,7 @@ import java.util.logging.Level;
  * Plays music from YouTube (or any site yt-dlp supports) to vanilla clients.
  *
  * <p>How it works: yt-dlp downloads the audio, ffmpeg converts it to Ogg Vorbis, the song is wrapped in
- * a tiny resource pack, the built-in web server (or litterbox) hands that pack to each listener's game, and once
+ * a tiny resource pack, the built-in web server (or a free file host) hands that pack to each listener's game, and once
  * their game has loaded it the plugin plays it as a normal sound. Songs are cached, so replays are instant.
  */
 public final class MusicManager implements Listener {
@@ -66,14 +66,13 @@ public final class MusicManager implements Listener {
     /** Main thread only. */
     private final Map<UUID, Set<UUID>> loadedPacks = new HashMap<>();
     private final Map<UUID, Playing> playing = new HashMap<>();
-    /** Litterbox links per track id, when pack-host is litterbox. */
-    private final Map<String, Upload> uploads = new ConcurrentHashMap<>();
+    /** File-host links per track id, when songs are uploaded instead of served by our web server. */
+    private final Map<String, FileHosts.Hosted> uploads = new ConcurrentHashMap<>();
     private final Map<String, CompletableFuture<URI>> uploading = new ConcurrentHashMap<>();
 
-    private record Upload(URI uri, long uploadedAt) {
-        boolean fresh() {
-            return System.currentTimeMillis() - uploadedAt < Litterbox.LIFETIME.minusHours(2).toMillis();
-        }
+    /** Still usable for a fresh download (with 10 minutes to spare). */
+    private static boolean fresh(FileHosts.Hosted hosted) {
+        return hosted.expiresAt() - System.currentTimeMillis() > 10 * 60 * 1000L;
     }
 
     private volatile String baseUrl;
@@ -99,8 +98,8 @@ public final class MusicManager implements Listener {
         loadIndex();
         unreachableUrl = YamlConfiguration.loadConfiguration(stateFile()).getString("unreachable-url");
         warmUp();
-        if (hostSetting().equals("litterbox")) {
-            plugin.getLogger().info("Music packs will be uploaded to litterbox.catbox.moe (music.pack-host: litterbox).");
+        if (hostSetting().equals("upload")) {
+            plugin.getLogger().info("Music packs will be uploaded to a file host (music.pack-host: upload).");
             return;
         }
         if (!plugin.getConfig().getBoolean("music.web-server.enabled", true)) {
@@ -134,13 +133,17 @@ public final class MusicManager implements Listener {
 
     private String hostSetting() {
         String setting = Text.lower(plugin.getConfig().getString("music.pack-host", "auto"));
-        return setting.equals("self") || setting.equals("litterbox") ? setting : "auto";
+        return switch (setting) {
+            case "self" -> "self";
+            case "upload", "litterbox" -> "upload";
+            default -> "auto";
+        };
     }
 
-    /** True when songs should be uploaded to litterbox rather than served by our own web server. */
+    /** True when songs should be uploaded to a file host rather than served by our own web server. */
     private boolean uploadMode() {
         return switch (hostSetting()) {
-            case "litterbox" -> true;
+            case "upload" -> true;
             case "self" -> false;
             default -> !serverRunning || (unreachableUrl != null && unreachableUrl.equals(baseUrl));
         };
@@ -315,7 +318,7 @@ public final class MusicManager implements Listener {
                         s.getInt("duration", -1), zip, PackBuilder.sha1(zip)));
                 String uploaded = s.getString("upload.url");
                 if (uploaded != null) {
-                    uploads.put(id, new Upload(URI.create(uploaded), s.getLong("upload.time")));
+                    uploads.put(id, new FileHosts.Hosted(URI.create(uploaded), s.getLong("upload.expires")));
                 }
             } catch (IOException ex) {
                 plugin.getLogger().warning("Music: skipping unreadable " + zip.getName());
@@ -329,10 +332,10 @@ public final class MusicManager implements Listener {
             yml.set(track.id() + ".title", track.title());
             yml.set(track.id() + ".url", track.url());
             yml.set(track.id() + ".duration", track.durationSeconds());
-            Upload upload = uploads.get(track.id());
+            FileHosts.Hosted upload = uploads.get(track.id());
             if (upload != null) {
                 yml.set(track.id() + ".upload.url", upload.uri().toString());
-                yml.set(track.id() + ".upload.time", upload.uploadedAt());
+                yml.set(track.id() + ".upload.expires", upload.expiresAt());
             }
         }
         try {
@@ -346,7 +349,7 @@ public final class MusicManager implements Listener {
 
     public String status() {
         if (uploadMode()) {
-            return "songs are uploaded to litterbox.catbox.moe"
+            return "songs are uploaded to a file host (" + String.join(", ", uploadHosts()) + ")"
                     + (hostSetting().equals("auto") && serverRunning ? " (players couldn't reach " + baseUrl + ")" : "");
         }
         if (!serverRunning) {
@@ -419,13 +422,13 @@ public final class MusicManager implements Listener {
                 Text.arg("count", targets.size()), Text.arg("loading", loading));
     }
 
-    /** Where players' games download this song's pack from: our own web server, or a litterbox upload. */
+    /** Where players' games download this song's pack from: our own web server, or a file-host upload. */
     private CompletableFuture<URI> packUri(Track track) {
         if (!uploadMode()) {
             return CompletableFuture.completedFuture(URI.create(baseUrl + "/pack/" + track.id() + ".zip"));
         }
-        Upload upload = uploads.get(track.id());
-        if (upload != null && upload.fresh()) {
+        FileHosts.Hosted upload = uploads.get(track.id());
+        if (upload != null && fresh(upload)) {
             return CompletableFuture.completedFuture(upload.uri());
         }
         CompletableFuture<URI> future = new CompletableFuture<>();
@@ -435,10 +438,11 @@ public final class MusicManager implements Listener {
         }
         plugin.async().execute(() -> {
             try {
-                URI uri = Litterbox.upload(track.pack());
-                uploads.put(track.id(), new Upload(uri, System.currentTimeMillis()));
+                FileHosts.Hosted hosted = FileHosts.upload(track.pack(), uploadHosts());
+                uploads.put(track.id(), hosted);
                 saveIndex();
-                future.complete(uri);
+                plugin.getLogger().info("Music: uploaded \"" + track.title() + "\" to " + hosted.uri().getHost());
+                future.complete(hosted.uri());
             } catch (Throwable ex) {
                 future.completeExceptionally(ex);
             } finally {
@@ -446,6 +450,11 @@ public final class MusicManager implements Listener {
             }
         });
         return future;
+    }
+
+    private List<String> uploadHosts() {
+        List<String> hosts = plugin.getConfig().getStringList("music.upload-hosts");
+        return hosts.isEmpty() ? FileHosts.DEFAULT_ORDER : hosts;
     }
 
     private void sendPack(CommandSender sender, Player player, Track track, boolean loop, URI uri) {
@@ -486,7 +495,7 @@ public final class MusicManager implements Listener {
                     // The music port isn't reachable from the internet (common on free hosts): upload instead, and remember that.
                     if (!uploadMode()) {
                         plugin.getLogger().warning("Music: players can't reach " + baseUrl
-                                + " - switching to uploading songs to litterbox.catbox.moe.");
+                                + " - switching to uploading songs to a file host.");
                         rememberUnreachable(baseUrl);
                         Text.send(sender, "<gray>Players can't reach the music port, so songs will be uploaded instead. Retrying...");
                     }
@@ -505,7 +514,9 @@ public final class MusicManager implements Listener {
                                     + "music.web-server.public-url, or set music.pack-host: auto in config.yml.",
                             Text.arg("name", name), Text.arg("url", String.valueOf(baseUrl)));
                 } else {
-                    Text.error(sender, "<name>'s game couldn't download the song from litterbox. Try again in a moment.",
+                    // That upload may have expired or the host may be having trouble: forget it so the next play re-uploads.
+                    uploads.remove(track.id());
+                    Text.error(sender, "<name>'s game couldn't download the song from the file host. Try playing it again.",
                             Text.arg("name", name));
                 }
             }

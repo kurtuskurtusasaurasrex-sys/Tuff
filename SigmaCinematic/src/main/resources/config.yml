@@ -56,12 +56,18 @@ music:
   prompt: "<light_purple>This server wants to play music for a cinematic scene."
 
   # Where players' games download each song from:
-  #   auto      - use the plugin's own web server; if players can't reach it (the port isn't
-  #               open, common on free hosts like Seedloaf), switch to litterbox automatically.
-  #   self      - only the plugin's own web server (needs an open port, see web-server below)
-  #   litterbox - upload each song to litterbox.catbox.moe, a free temporary file host.
-  #               No port needed. Uploads expire after 3 days and are redone automatically.
+  #   auto   - use the plugin's own web server; if players can't reach it (the port isn't
+  #            open, common on free hosts like Seedloaf), switch to "upload" automatically.
+  #   self   - only the plugin's own web server (needs an open port, see web-server below)
+  #   upload - upload each song to a free file host (no port needed). Uploads expire
+  #            and are redone automatically when a song is played again.
   pack-host: auto
+  # File hosts to try, in order, when uploading. If one is down, the next is used.
+  #   litterbox (keeps files 3 days), uguu (3 hours), tmpfiles (1 hour)
+  upload-hosts:
+    - litterbox
+    - uguu
+    - tmpfiles
 
   # Only used when pack-host is "auto" or "self".
   web-server:

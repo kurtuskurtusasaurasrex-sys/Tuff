@@ -111,9 +111,9 @@ instant. It also works with SoundCloud, Bandcamp, direct `.mp3` links and most o
    They take about 200 MB. Watch the console for `Music: ffmpeg is ready.` and the other tools.
 2. **Let players download the songs.** With the default `music.pack-host: auto`, the plugin serves
    songs from its own web server on **port 8163**. If players can't reach that port, it
-   automatically switches to uploading songs to the free file host litterbox.catbox.moe, where
-   uploads expire after 3 days and are redone automatically. You can force either option with
-   `pack-host: self` or `pack-host: litterbox`.
+   automatically switches to uploading songs to a free file host. It tries litterbox.catbox.moe,
+   then uguu.se, then tmpfiles.org, and uploads are redone automatically when they expire. You can
+   force either option with `pack-host: self` or `pack-host: upload`.
 3. Players must have *Server Resource Packs* set to **Enabled** or **Prompt**
    (Multiplayer → select server → Edit). The plugin tells you if someone has them disabled.
 
@@ -145,9 +145,9 @@ aren't affected by this block.
      mineskin-api-key: "msk_..."
    ```
 4. **Music:** nothing to set up. The first time you play a song, the plugin tries its own music
-   port. Seedloaf doesn't open that port, so the plugin notices, switches to uploading songs to
-   litterbox, and remembers that for next time. To skip that first try, set
-   `music.pack-host: litterbox` in `config.yml`.
+   port. Seedloaf doesn't open that port, so the plugin notices, switches to uploading songs to a
+   free file host, and remembers that for next time. To skip that first try, set
+   `music.pack-host: upload` in `config.yml`.
 5. Seedloaf stops the server when nobody is online. The plugin's downloaded tools, songs and
    disguises are saved in `plugins/SigmaCinematic/`, so they stay across restarts.
 
