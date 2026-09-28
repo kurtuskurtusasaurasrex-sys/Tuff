@@ -19,6 +19,7 @@ import org.bukkit.scheduler.BukkitTask;
 
 import java.io.File;
 import java.io.IOException;
+import java.net.InetSocketAddress;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -60,6 +61,7 @@ public final class MusicManager implements Listener {
     private final File indexFile;
     private final AudioTools tools;
     private final PackServer server;
+    private final MinecraftPortHttp minecraftPort;
 
     private final Map<String, Track> tracks = Collections.synchronizedMap(new LinkedHashMap<>());
     private final Map<String, CompletableFuture<Track>> downloads = new ConcurrentHashMap<>();
@@ -87,10 +89,13 @@ public final class MusicManager implements Listener {
         this.dir = new File(plugin.getDataFolder(), "music");
         this.indexFile = new File(dir, "tracks.yml");
         this.tools = new AudioTools(plugin);
-        this.server = new PackServer(id -> {
-            Track track = tracks.get(id);
-            return track == null ? null : track.pack();
-        });
+        this.server = new PackServer(this::packFile);
+        this.minecraftPort = new MinecraftPortHttp(this::packFile, plugin.getLogger());
+    }
+
+    private File packFile(String id) {
+        Track track = tracks.get(id);
+        return track == null ? null : track.pack();
     }
 
     // ---------------------------------------------------------------- lifecycle
@@ -100,6 +105,9 @@ public final class MusicManager implements Listener {
         loadIndex();
         unreachableUrl = YamlConfiguration.loadConfiguration(stateFile()).getString("unreachable-url");
         warmUp();
+        if (hostSetting().equals("auto") && plugin.getConfig().getBoolean("music.minecraft-port", true) && minecraftPort.install()) {
+            plugin.getLogger().info("Music: songs will be sent through the Minecraft server port (no extra port needed).");
+        }
         if (hostSetting().equals("upload")) {
             plugin.getLogger().info("Music packs will be uploaded to a file host (music.pack-host: upload).");
             return;
@@ -173,6 +181,7 @@ public final class MusicManager implements Listener {
             }
         }
         playing.clear();
+        minecraftPort.uninstall();
         server.stop();
         serverRunning = false;
     }
@@ -352,6 +361,9 @@ public final class MusicManager implements Listener {
     // ---------------------------------------------------------------- playback
 
     public String status() {
+        if (hostSetting().equals("auto") && minecraftPort.installed() && !failedHosts.contains(MINECRAFT_PORT)) {
+            return "songs are sent through the Minecraft server port";
+        }
         if (uploadMode()) {
             return "songs are uploaded to a file host (" + String.join(", ", uploadHosts()) + ")"
                     + (hostSetting().equals("auto") && serverRunning ? " (players couldn't reach " + baseUrl + ")" : "");
@@ -364,7 +376,8 @@ public final class MusicManager implements Listener {
 
     /** Plays a link (or a cached song) to the given players. Call on the main thread. */
     public void play(CommandSender sender, String input, List<Player> targets, boolean loop) {
-        if (!uploadMode() && (!serverRunning || baseUrl == null)) {
+        boolean viaPort = hostSetting().equals("auto") && minecraftPort.installed() && !failedHosts.contains(MINECRAFT_PORT);
+        if (!viaPort && !uploadMode() && (!serverRunning || baseUrl == null)) {
             Text.error(sender, "Music is unavailable: <why>.", Text.arg("why", status()));
             return;
         }
@@ -406,17 +419,13 @@ public final class MusicManager implements Listener {
             }
         }
         int loading = needPack.size();
-        if (!needPack.isEmpty()) {
-            packUri(track).whenComplete((uri, error) -> Bukkit.getScheduler().runTask(plugin, () -> {
+        for (Player player : needPack) {
+            packUri(track, player).whenComplete((uri, error) -> Bukkit.getScheduler().runTask(plugin, () -> {
                 if (error != null) {
                     Throwable cause = error.getCause() != null ? error.getCause() : error;
                     Text.error(sender, "Could not host the song for players: <why>", Text.arg("why", String.valueOf(cause.getMessage())));
-                    return;
-                }
-                for (Player player : needPack) {
-                    if (player.isOnline()) {
-                        sendPack(sender, player, track, loop, uri);
-                    }
+                } else if (player.isOnline()) {
+                    sendPack(sender, player, track, loop, uri);
                 }
             }));
         }
@@ -426,7 +435,35 @@ public final class MusicManager implements Listener {
                 Text.arg("count", targets.size()), Text.arg("loading", loading));
     }
 
-    /** Where players' games download this song's pack from: our own web server, or a file-host upload. */
+    /**
+     * Where this player's game downloads the song: first the address they joined with (the Minecraft
+     * port), then our own web server, then an upload site - skipping whatever already failed.
+     */
+    private CompletableFuture<URI> packUri(Track track, Player player) {
+        if (hostSetting().equals("auto") && minecraftPort.installed() && !failedHosts.contains(MINECRAFT_PORT)) {
+            InetSocketAddress joined = player.getVirtualHost();
+            if (joined != null && joined.getPort() > 0) {
+                String host = joined.getHostString();
+                int zero = host.indexOf('\0');
+                if (zero >= 0) {
+                    host = host.substring(0, zero); // modded clients append markers
+                }
+                if (host.endsWith(".")) {
+                    host = host.substring(0, host.length() - 1);
+                }
+                if (host.contains(":")) {
+                    host = "[" + host + "]";
+                }
+                if (!host.isEmpty()) {
+                    return CompletableFuture.completedFuture(URI.create("http://" + host + ":" + joined.getPort()
+                            + MinecraftPortHttp.PATH_PREFIX + track.id() + ".zip"));
+                }
+            }
+        }
+        return packUri(track);
+    }
+
+    /** Our own web server, or a file-host upload. */
     private CompletableFuture<URI> packUri(Track track) {
         if (!uploadMode()) {
             return CompletableFuture.completedFuture(URI.create(baseUrl + "/pack/" + track.id() + ".zip"));
@@ -456,6 +493,8 @@ public final class MusicManager implements Listener {
         return future;
     }
 
+    private static final String MINECRAFT_PORT = "minecraft-port";
+
     private List<String> uploadHosts() {
         List<String> hosts = new ArrayList<>(plugin.getConfig().getStringList("music.upload-hosts"));
         if (hosts.isEmpty()) {
@@ -468,7 +507,8 @@ public final class MusicManager implements Listener {
     private void sendPack(CommandSender sender, Player player, Track track, boolean loop, URI uri) {
         UUID playerId = player.getUniqueId();
         ResourcePackInfo info = ResourcePackInfo.resourcePackInfo(track.packId(), uri, track.sha1());
-        boolean selfHosted = baseUrl != null && uri.toString().startsWith(baseUrl);
+        boolean viaMinecraftPort = uri.getPath() != null && uri.getPath().startsWith(MinecraftPortHttp.PATH_PREFIX);
+        boolean selfHosted = !viaMinecraftPort && baseUrl != null && uri.toString().startsWith(baseUrl);
         FileHosts.Hosted upload = uploads.get(track.id());
         String uploadHost = !selfHosted && upload != null && upload.uri().equals(uri) ? upload.host() : null;
         ResourcePackRequest request = ResourcePackRequest.resourcePackRequest()
@@ -478,9 +518,10 @@ public final class MusicManager implements Listener {
                 .prompt(Text.parse(plugin.getConfig().getString("music.prompt", "Music for this scene")))
                 .callback((id, status, audience) -> {
                     if (Bukkit.isPrimaryThread()) {
-                        onStatus(sender, playerId, track, loop, status, selfHosted, uploadHost);
+                        onStatus(sender, playerId, track, loop, status, viaMinecraftPort, selfHosted, uploadHost);
                     } else {
-                        Bukkit.getScheduler().runTask(plugin, () -> onStatus(sender, playerId, track, loop, status, selfHosted, uploadHost));
+                        Bukkit.getScheduler().runTask(plugin, () -> onStatus(sender, playerId, track, loop, status,
+                                viaMinecraftPort, selfHosted, uploadHost));
                     }
                 })
                 .build();
@@ -488,7 +529,7 @@ public final class MusicManager implements Listener {
     }
 
     private void onStatus(CommandSender sender, UUID playerId, Track track, boolean loop, ResourcePackStatus status,
-                          boolean selfHosted, String uploadHost) {
+                          boolean viaMinecraftPort, boolean selfHosted, String uploadHost) {
         Player player = Bukkit.getPlayer(playerId);
         String name = player == null ? "A player" : player.getName();
         switch (status) {
@@ -501,7 +542,24 @@ public final class MusicManager implements Listener {
             case DECLINED -> Text.error(sender, "<name> has server resource packs disabled, so they can't hear music "
                     + "(Multiplayer > Edit server > Server Resource Packs: Enabled).", Text.arg("name", name));
             case FAILED_DOWNLOAD, INVALID_URL -> {
-                if (selfHosted && hostSetting().equals("auto")) {
+                if (viaMinecraftPort) {
+                    // The host's network doesn't pass web requests through to the Minecraft port: use the next way.
+                    if (failedHosts.add(MINECRAFT_PORT)) {
+                        plugin.getLogger().warning("Music: players couldn't download songs through the Minecraft port - trying other ways.");
+                    }
+                    if (player != null) {
+                        Text.send(sender, "<gray><name>'s game couldn't get the song through the server address, trying another way...",
+                                Text.arg("name", name));
+                        packUri(track, player).whenComplete((uri, error) -> Bukkit.getScheduler().runTask(plugin, () -> {
+                            if (error != null) {
+                                Throwable cause = error.getCause() != null ? error.getCause() : error;
+                                Text.error(sender, "Could not upload the song: <why>", Text.arg("why", String.valueOf(cause.getMessage())));
+                            } else if (player.isOnline()) {
+                                sendPack(sender, player, track, loop, uri);
+                            }
+                        }));
+                    }
+                } else if (selfHosted && hostSetting().equals("auto")) {
                     // The music port isn't reachable from the internet (common on free hosts): upload instead, and remember that.
                     if (!uploadMode()) {
                         plugin.getLogger().warning("Music: players can't reach " + baseUrl

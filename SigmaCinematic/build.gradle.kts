@@ -15,6 +15,8 @@ repositories {
 
 dependencies {
     compileOnly("io.papermc.paper:paper-api:$paperVersion")
+    // Netty ships inside the Minecraft server; only needed to compile the music download handler.
+    compileOnly("io.netty:netty-transport:4.2.16.Final")
 }
 
 java {
