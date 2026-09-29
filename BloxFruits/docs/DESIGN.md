@@ -1,6 +1,6 @@
 # Blox Fruits Recreation: Design Doc
 
-Status: draft v1 (2026-09-29)
+Status: draft v2 (2026-09-29)
 Deliverable: a playable Roblox place file (`.rbxl`) that recreates the core loop of Blox Fruits.
 
 ## 0. Sources and confidence
@@ -15,9 +15,12 @@ References consulted (via search results): Blox Fruits Wiki pages for Stats, Lev
 Fighting Styles, Bosses, Swords, Guns, Boats, Health, Energy; Dexerto, Sportskeeda, TechWiser,
 Beebom, RobloxDen, RBLXGUIDE and DungeonPath island/boss guides.
 
-**IP note.** Blox Fruits belongs to Gamer Robot. A private recreation for learning is fine, but
-if the place is ever published we should use our own models, sounds, and art, and rename
-fruits/NPCs where needed. Nothing in this repo should include ripped assets.
+**Decisions (2026-09-29):** the place stays **private**, it is built **directly in Roblox Studio**,
+and **mobile is in scope** for the MVP.
+
+**IP note.** Blox Fruits belongs to Gamer Robot. Because this is a private project we keep the
+original names for fruits, islands, and NPCs. We still build our own models, sounds, and art and
+never import ripped assets.
 
 ---
 
@@ -214,19 +217,27 @@ type. Bosses extend it with a move list.
 - **Damage numbers** and a hit marker.
 - **Team select** on first join (Pirate/Marine).
 - **Map / island name banner** when entering an island.
-- Mobile: on-screen move buttons. Plan for it in the layout from the start; retrofitting is
-  painful.
+- **Mobile (in scope)**: on-screen buttons for M1, Z/X/C/V/F, dash, jump/Geppo, and
+  hotbar 1–4, using `ContextActionService` so the same actions also bind to keyboard and gamepad.
+  Every screen uses scale-based sizing and `UIAspectRatioConstraint` and is tested in Studio's
+  phone emulator (for example iPhone SE and a 16:9 Android). Menus must be usable with one thumb
+  and must not cover the move buttons.
 
 ## 10. Technical plan
 
-- **Source layout**: Luau code in the repo, built into the place with **Rojo**
-  (`rojo build -o BloxFruits.rbxl`). Map geometry is built in Studio and kept in a checked-in
-  `.rbxlx` or `.rbxm` that Rojo merges in, so code reviews stay text-based.
-- **Folders**
-  - `src/shared/Data/`: fruit, sword, gun, style, enemy, island, and quest tables.
-  - `src/shared/Net/`: RemoteEvent definitions.
-  - `src/server/Services/`: PlayerData, Stats, Combat, Quest, Shop, Enemy, Boss, FruitDealer.
-  - `src/client/Controllers/`: Input, HUD, Menus, VFX, Camera.
+- **Workflow: Studio only.** The place is built and scripted directly in Roblox Studio. The
+  source of truth is the saved place file in the repo at `BloxFruits/BloxFruits.rbxl`. Commit it
+  after each working session with a message saying what changed. Studio Team Create is optional
+  if more than one person edits at once.
+- **Explorer layout**
+  - `ReplicatedStorage/Shared/Data/`: fruit, sword, gun, style, enemy, island, and quest
+    ModuleScripts.
+  - `ReplicatedStorage/Shared/Net/`: RemoteEvents and RemoteFunctions.
+  - `ServerScriptService/Services/`: PlayerData, Stats, Combat, Quest, Shop, Enemy, Boss,
+    FruitDealer.
+  - `StarterPlayer/StarterPlayerScripts/Controllers/`: Input (keyboard, touch, gamepad), HUD,
+    Menus, VFX, Camera.
+  - `Workspace/Islands/<IslandName>/`: map geometry, spawn zones, NPC anchors.
 - **Persistence**: a DataStore profile per player (level, EXP, Beli, stat points, owned items,
   mastery per weapon, current fruit, quest). Session-locked, autosaved, saved on leave.
 - **Combat**: server hitboxes (spatial queries with `GetPartBoundsInBox`/raycasts),
@@ -236,17 +247,17 @@ type. Bosses extend it with a move list.
 ## 11. Build order
 
 ### Phase 1: Vertical slice (one island, fully playable)
-1. Rojo project skeleton and a `.rbxl` build in CI.
+1. Place file skeleton: Explorer folders above, lighting, spawn, one starter island.
 2. Player data and DataStore profile.
 3. Level, EXP, Beli, stats, and the stats menu.
 4. Combat framework: M1 plus Z/X moves, cooldowns, energy, server hitboxes, damage numbers.
 5. The Combat fighting style and Katana.
 6. Enemy AI with Bandits on the starter island.
 7. Quest Giver and quest tracker.
-8. HUD.
+8. HUD with the mobile touch controls.
 
-**Done when:** a new player can spawn, take a quest, kill Bandits, level up, spend stats, and
-the progress survives rejoining.
+**Done when:** a new player on PC or phone can spawn, take a quest, kill Bandits, level up,
+spend stats, and the progress survives rejoining.
 
 ### Phase 2: First real content
 9. Blox Fruit framework and dealer with Bomb and Flame.
@@ -266,10 +277,10 @@ the progress survives rejoining.
 Second Sea and the sea gate, fruit inventory and trading, raids and awakening, races, PvP and
 bounty, Third Sea, events.
 
-## 12. Open questions
+## 12. Decisions log
 
-1. Will this ever be published publicly, or is it a private project? That decides how strictly
-   we avoid original names and designs.
-2. Rojo-based repo (recommended) or build everything directly in Studio and commit only the
-   `.rbxl`?
-3. Is mobile support in scope for the MVP?
+| Date | Question | Decision |
+|---|---|---|
+| 2026-09-29 | Public or private? | Private, so original names are kept |
+| 2026-09-29 | Rojo or Studio? | Studio only; the `.rbxl` in the repo is the source of truth |
+| 2026-09-29 | Mobile in MVP? | Yes |
