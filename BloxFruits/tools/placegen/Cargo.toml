@@ -1,0 +1,13 @@
+[package]
+name = "placegen"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+rbx_dom_weak = "*"
+rbx_binary = "*"
+rbx_types = "*"
+rbx_xml = "*"
+mlua = { version = "*", features = ["luau", "vendored"] }
+walkdir = "2"

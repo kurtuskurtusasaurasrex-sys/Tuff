@@ -1,0 +1,49 @@
+base: luau
+name: rbx
+globals:
+  warn:
+    args:
+      - type: "..."
+  task:
+    struct: Any
+  typeof:
+    args:
+      - type: any
+  game:
+    struct: Any
+  workspace:
+    struct: Any
+  script:
+    struct: Any
+  Instance:
+    struct: Any
+  Vector3:
+    struct: Any
+  Vector2:
+    struct: Any
+  CFrame:
+    struct: Any
+  Color3:
+    struct: Any
+  Enum:
+    struct: Any
+  UDim:
+    struct: Any
+  UDim2:
+    struct: Any
+  TweenInfo:
+    struct: Any
+  RaycastParams:
+    struct: Any
+  OverlapParams:
+    struct: Any
+  BrickColor:
+    struct: Any
+  NumberSequence:
+    struct: Any
+  NumberRange:
+    struct: Any
+structs:
+  Any:
+    "*":
+      any: true
