@@ -42,4 +42,17 @@ PATCHES = [
     ('env night restore',
      "const rt = pmrem.fromScene(envScene, 0, 0.1, 200);\n    skyU.uNight.value = n;",
      "const rt = pmrem.fromScene(envScene, 0, 0.1, 200);\n    skyU.uNight.value = n; skyU.uMoonK.value = mk;"),
+
+    # ---- pause menu: entries from the Deluxe parts (GAME.xpause: [{a, t, cls, act}])
+    ('pause items',
+     "      { a: 'settings', t: 'Settings', cls: 'white' },",
+     "      ...(GAME.xpause || []).map((x) => ({ a: x.a, t: x.t, cls: x.cls || '', k: x.k })),\n      { a: 'settings', t: 'Settings', cls: 'white' },"),
+    ('pause act',
+     "    else if (a === 'build') { closePause(); exitVehicle(); BUILD.go(); }",
+     "    else if (a === 'build') { closePause(); exitVehicle(); BUILD.go(); }\n    else { const x = (GAME.xpause || []).find((i) => i.a === a); if (x) { closePause(); try { x.act(); } catch (e) { console.error(e); } } }"),
+
+    # ---- HUD: share the island map image (the minimap draws from it)
+    ('hud map base',
+     "  return Hx;\n})();",
+     "  Hx.mapBase = () => { if (!mapBase) mapBase = buildMapBase(); return mapBase; };\n  return Hx;\n})();"),
 ]

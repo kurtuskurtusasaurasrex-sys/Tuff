@@ -61110,6 +61110,7 @@ const MENUS = (() => {
       { a: 'quests', t: 'Quest Log', cls: '' },
       { a: 'racers', t: 'Brickspeed Racers', cls: '', off: typeof RACERS === 'undefined' },
       { a: 'build', t: 'Brick Builder', cls: '', off: typeof BUILD === 'undefined' },
+      ...(GAME.xpause || []).map((x) => ({ a: x.a, t: x.t, cls: x.cls || '', k: x.k })),
       { a: 'settings', t: 'Settings', cls: 'white' },
       { a: 'title', t: 'Save & Return to Title', cls: 'red' },
       { a: 'explore', t: 'Free Explore', cls: 'blue' },
@@ -61148,6 +61149,7 @@ const MENUS = (() => {
     else if (a === 'explore') { closePause(); exitVehicle(); GAME.toExplore(); }
     else if (a === 'racers') { closePause(); exitVehicle(); RACERS.open('play'); }
     else if (a === 'build') { closePause(); exitVehicle(); BUILD.go(); }
+    else { const x = (GAME.xpause || []).find((i) => i.a === a); if (x) { closePause(); try { x.act(); } catch (e) { console.error(e); } } }
   }
   function openSub(kind) {
     S.sub = kind; const box = $('mn-psub');
@@ -63766,6 +63768,7 @@ const HUD = (() => {
   });
   Object.assign(Hx, { openMap, closeMap, refresh, spot, near, report, why, showKeys, get S() { return S; } });
   GAME.register('hud', Hx);
+  Hx.mapBase = () => { if (!mapBase) mapBase = buildMapBase(); return mapBase; };
   return Hx;
 })();
 
@@ -74654,6 +74657,667 @@ const DAYNIGHT = (() => {
   // jump straight to a time + weather (tests / screenshots): no easing, the image light refreshed at once
   function snap(h, kind) { S.mode = h; S.hour = h; if (kind) { const k = WX[kind] || WX.clear; S.W.kind = kind; S.W.left = 1e9; S.W.cloud = k.cloud; S.W.rain = k.rain; S.W.snow = k.snow; } envClock = 0; S.env.el = -99; }
   return { S, set, snap, weather, setDayLength: (m) => { S.dayMin = m; saveCfg(); }, sunAt, moonAt, params };
+})();
+
+/* ==== p72_dlxkit.js ==== */
+/* DLX — small helpers the Deluxe parts share: brick-model primitives at any position (units, not the stud grid),
+   a pop-up card for news / trophies, the listener's position, a pause-menu hook and a key hook that respects the game's
+   own locks (modals, text fields, vehicles). */
+const DLX = (() => {
+  const V3 = THREE.Vector3, Q0 = new THREE.Quaternion(), Y = new V3(0, 1, 0);
+  // primitives on a BR model builder, in model units (y up), like the creature kit in COMBAT
+  const cube = (b, x, y, z, sx, sy, sz, col, o = {}) => b.tplM('box', new THREE.Matrix4().compose(new V3(x, y - sy / 2, z), o.q || Q0, new V3(sx, sy, sz)), col, o);
+  const ball = (b, x, y, z, sx, sy, sz, col, o = {}) => b.tplM('sphere', new THREE.Matrix4().compose(new V3(x, y, z), Q0, new V3(sx, sy, sz)), col, o);
+  const seg = (b, name, a, c, r, col, o = {}) => { const d = new V3().subVectors(c, a), L = d.length(); if (L < 1e-4) return; const q = new THREE.Quaternion().setFromUnitVectors(Y, d.clone().normalize()); b.tplM(name, new THREE.Matrix4().compose(a, q, new V3(r * 2, L, r * 2)), col, o); };
+  const model = (name, fn) => { const g = BR.makeModel(fn, { name }); g.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } }); return g; };
+  const play = () => typeof GAME !== 'undefined' && GAME.phase === 'play';
+  const onFoot = () => play() && PLAYER.active && PLAYER.fig && !PLAYER.driving && !(typeof INTERIOR !== 'undefined' && INTERIOR.cur) && !(typeof TRAINRIDE !== 'undefined' && TRAINRIDE.S && TRAINRIDE.S.on);
+  const here = () => { const p = play() ? GAME.playerPos() : null; return p ? { x: p[0], y: p[1], z: p[2] } : { x: CAM.tgt.x, y: CAM.tgt.y, z: CAM.tgt.z }; };
+  const typing = (e) => e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA');
+  const sfx = (n, o) => { if (typeof AUDIO !== 'undefined') AUDIO.sfx(n, o || {}); };
+
+  /* an open, flat, dry patch of ground near (x, z) for a prop of half-size r: [x, groundY, z] (spiral search) */
+  function openSpot(x, z, r = 2.5, rMax = 40) {
+    const cell = (y) => Math.floor(y / 0.4 + 1e-4);
+    const ok = (cx, cz) => {
+      const g0 = WORLD.ground(cx, cz, WORLD.y(cx, cz) + 1.3); if (g0 < 0.3 && WORLD.isWater(cx, cz)) return null;
+      for (let dx = -r; dx <= r; dx += 1) for (let dz = -r; dz <= r; dz += 1) {
+        const px = cx + dx, pz = cz + dz, g = WORLD.ground(px, pz, g0 + 1.3);
+        if (Math.abs(g - g0) > 0.45 || (g < 0.3 && WORLD.isWater(px, pz))) return null;
+        for (let c = cell(g + 0.2); c <= cell(g + 4); c++) if (BR.solid(Math.floor(px), c, Math.floor(pz))) return null;
+        if (typeof FIG !== 'undefined' && FIG.nowalk && (FIG.nowalk(px, pz) & 5)) return null;
+        if (LAYOUT.TRACK && LAYOUT.TRACK.nearest(px, pz).d < 5) return null;
+      }
+      return g0;
+    };
+    for (let rr = 0; rr <= rMax; rr += 1.5) for (let a = 0; a < M.TAU; a += Math.max(0.2, 1.4 / Math.max(1, rr))) {
+      const cx = Math.round(x + Math.cos(a) * rr) + 0.5, cz = Math.round(z + Math.sin(a) * rr) + 0.5, g = ok(cx, cz);
+      if (g !== null) return [cx, g, cz];
+    }
+    const s = PLAYER.spawnNear(x, z); return [s[0], s[2], s[1]];
+  }
+
+  /* pop-up cards (bottom right, above the minimap, stacked): {title, sub, icon (html), col} */
+  let box = null; const queue = [];
+  function pop(title, sub, o = {}) {
+    if (BA.flag('test') || BA.flag('shot')) return;
+    if (!box) {
+      const st = document.createElement('style'); st.textContent = `
+        #dlx-pops{position:fixed;right:16px;bottom:252px;z-index:70;display:flex;flex-direction:column-reverse;gap:10px;pointer-events:none;max-width:min(360px,calc(100vw - 32px))}
+        .dlx-pop{display:flex;align-items:center;gap:12px;background:#fffdf5;color:#1a1a1a;border:3px solid #1a1a1a;border-radius:12px;padding:10px 14px 10px 10px;box-shadow:0 5px 0 #1a1a1a,0 12px 28px rgba(0,0,0,.35);transform:translateX(120%);transition:transform .45s cubic-bezier(.3,1.5,.5,1),opacity .4s;font:600 13px var(--ui)}
+        .dlx-pop.on{transform:none}.dlx-pop.off{opacity:0;transform:translateX(30%)}
+        .dlx-pop .ic{flex:none;width:46px;height:46px;border-radius:10px;border:3px solid #1a1a1a;display:flex;align-items:center;justify-content:center;font:900 24px var(--chunky);color:#1a1a1a;box-shadow:inset 0 -5px 0 rgba(0,0,0,.14)}
+        .dlx-pop .tx b{display:block;font:900 italic 16px var(--chunky);letter-spacing:.02em;margin-bottom:2px}
+        .dlx-pop .tx small{display:block;font:800 10px var(--ui);letter-spacing:.14em;text-transform:uppercase;color:#d8262a;margin-bottom:2px}`;
+      document.head.appendChild(st);
+      box = document.createElement('div'); box.id = 'dlx-pops'; document.body.appendChild(box);
+    }
+    const el = document.createElement('div'); el.className = 'dlx-pop';
+    el.innerHTML = `<div class="ic" style="background:${o.col || '#ffd21a'}">${o.icon || '&#9733;'}</div><div class="tx">${o.kicker ? `<small>${o.kicker}</small>` : ''}<b>${title}</b>${sub || ''}</div>`;
+    box.appendChild(el); queue.push(el); while (queue.length > 3) { const x = queue.shift(); x.remove(); }
+    requestAnimationFrame(() => requestAnimationFrame(() => el.classList.add('on')));
+    setTimeout(() => { el.classList.add('off'); setTimeout(() => { el.remove(); const i = queue.indexOf(el); if (i >= 0) queue.splice(i, 1); }, 450); }, o.ms || 5200);
+  }
+
+  /* pause-menu entries from the Deluxe parts: GAME.xpause [{a, t, cls, act}] (patched into MENUS) */
+  function pauseItem(it) { if (typeof GAME === 'undefined') return; (GAME.xpause = GAME.xpause || []).push(it); }
+  function setting(row) { if (typeof GAME === 'undefined') return; (GAME.xsettings = GAME.xsettings || []).push(row); }
+
+  return { cube, ball, seg, model, play, onFoot, here, typing, sfx, pop, pauseItem, setting, openSpot, V3 };
+})();
+
+/* ==== p73_jetpack.js ==== */
+/* JETPACK — the Classic Space jetpack.  It waits on a glowing launch stand in the park by the fountain (E to strap it on,
+   J to take it off / put it back on).  Jump, then HOLD Space in the air to fly: twin tanks, trans-yellow fins, two
+   nozzles with real flames and smoke; you steer with WASD as usual (a little faster in the air), the fuel gauge drains
+   while you burn and refills the moment your boots touch ground.  Tops out at a respectable 140 studs.
+   API: JETPACK.S {owned, on, flying, fuel} · JETPACK.equip(on) */
+const JETPACK = (() => {
+  const off = BA.flag('test') || /[?&]islandgp(?=&|=|$)/.test(location.search);
+  const S = { owned: false, on: false, flying: false, fuel: 1, air: 0, jetT: 0, puffT: 0, stand: null, pack: null, flames: [], standPos: null, burn: 0, maxY: 0 };
+  const FUEL_S = 5.5, REFILL_S = 2.4, THRUST = 30, CLIMB = 10.5, CEIL = 140;
+  const { cube, ball, seg, model, V3 } = DLX;
+
+  function buildPack() {
+    const g = model('jetpack', (b) => {
+      cube(b, 0, 0.1, -0.05, 0.62, 1.05, 0.4, 'blue');                      // body
+      cube(b, 0, 0.66, -0.05, 0.5, 0.12, 0.34, 'lgray');                     // top plate
+      for (const s of [-1, 1]) {
+        seg(b, 'cyl', new V3(s * 0.46, -0.55, -0.12), new V3(s * 0.46, 0.55, -0.12), 0.26, 'lgray');   // tanks
+        ball(b, s * 0.46, 0.56, -0.12, 0.52, 0.34, 0.52, 'silver');
+        b.tplM('cone', new THREE.Matrix4().compose(new V3(s * 0.46, -0.5, -0.12), new THREE.Quaternion().setFromAxisAngle(new V3(1, 0, 0), Math.PI), new V3(0.44, 0.34, 0.44)), 'dgray');   // nozzles
+        cube(b, s * 0.86, 0.35, -0.12, 0.34, 0.08, 0.7, 'tyellow', { glow: false });   // fins
+        cube(b, s * 0.74, 0.36, -0.12, 0.12, 0.3, 0.12, 'lgray');
+      }
+      cube(b, 0, 0.3, 0.19, 0.3, 0.2, 0.06, 'tred', { glow: true });          // the little status light
+    });
+    const flames = [];
+    for (const s of [-1, 1]) {
+      const f = model('jet flame', (b) => { b.tplM('flame', new THREE.Matrix4().compose(new V3(0, 0, 0), new THREE.Quaternion().setFromAxisAngle(new V3(1, 0, 0), Math.PI), new V3(0.5, 1.2, 0.5)), 'torange', { glow: true }); ball(b, 0, -0.28, 0, 0.28, 0.55, 0.28, 'tyellow', { glow: true }); });
+      f.position.set(s * 0.46, -0.9, -0.12); f.visible = false; g.add(f); flames.push(f);
+    }
+    return { g, flames };
+  }
+  function buildStand() {
+    const st = model('jetpack stand', (b) => {
+      b.box(-2, 0, -2, 4, 1, 4, 'lgray'); b.box(-1, 1, -1, 2, 3, 2, 'dgray'); b.plate(-2, 4, -2, 4, 4, 'blue');
+      for (const [x, z] of [[-2, -2], [1, -2], [-2, 1], [1, 1]]) b.box(x, 1, z, 1, 3, 1, 'tyellow', BR.F.GLOW);
+    });
+    const ring = model('jetpack ring', (b) => { b.tplM('torus', new THREE.Matrix4().compose(new V3(0, 0, 0), new THREE.Quaternion().setFromAxisAngle(new V3(1, 0, 0), Math.PI / 2), new V3(2.6, 2.6, 1.6)), 'tyellow', { glow: true, pulse: true }); });
+    ring.position.y = 2.2; st.add(ring); st.userData.ring = ring;
+    return st;
+  }
+
+  BA.build('jetpack', 93, (scene) => {
+    if (off) return;
+    S.standPos = DLX.openSpot(GAME.START_AT[0] + 10, GAME.START_AT[1] + 4, 2.5);   // x, y, z
+    S.stand = buildStand(); S.stand.position.set(S.standPos[0], S.standPos[1], S.standPos[2]); scene.add(S.stand);
+    const pk = buildPack(); S.pack = pk.g; S.flames = pk.flames; S.pack.visible = false; scene.add(S.pack);
+    S.demo = buildPack(); S.demo.g.position.set(S.standPos[0], S.standPos[1] + 3.4, S.standPos[2]); scene.add(S.demo.g);
+    GAME.interact.add({ id: 'jetpack', pos: () => [S.standPos[0], S.standPos[1], S.standPos[2]], r: 4, priority: 0.4,
+      label: () => (S.on ? 'Put the jetpack back' : 'Strap on the Classic Space jetpack'),
+      act: () => { if (!S.owned) { S.owned = true; GAME.flag('jetpack', 1); DLX.pop('JETPACK!', 'Jump, then <b>hold Space</b> to fly · <b>J</b> takes it on / off', { kicker: 'New gear', icon: '&#128640;', col: '#4a90e2' }); DLX.sfx('gear', DLX.here()); } equip(!S.on); } });
+  });
+
+  function equip(on) { if (!S.owned) return; S.on = !!on; if (typeof GAME !== 'undefined' && GAME.save) GAME.save.flags.jetOn = S.on ? 1 : 0; DLX.sfx(S.on ? 'place' : 'remove', DLX.here()); if (!S.on) S.flying = false; }
+  if (!off && typeof GAME !== 'undefined') GAME.on('phase', (d) => { if (d && d.phase === 'play') { S.owned = !!GAME.save.flags.jetpack; S.on = S.owned && GAME.save.flags.jetOn !== 0; S.fuel = 1; } });
+  if (!off) window.addEventListener('keydown', (e) => { if (DLX.typing(e) || e.repeat || e.code !== 'KeyJ' || !DLX.play() || GAME.locked()) return; if (!S.owned) { DLX.pop('No jetpack yet', 'There\'s one on the launch stand in the park by the fountain', { icon: '?', col: '#e0e0e0' }); return; } equip(!S.on); });
+
+  // fuel gauge (bottom centre, only while it matters)
+  let gauge = null;
+  function gaugeUI(show) {
+    if (!gauge) {
+      const st = document.createElement('style'); st.textContent = `#dlx-fuel{position:fixed;left:50%;bottom:74px;transform:translateX(-50%);z-index:45;width:180px;height:16px;border:3px solid #1a1a1a;border-radius:9px;background:#fffdf5;box-shadow:0 3px 0 #1a1a1a;overflow:hidden;opacity:0;transition:opacity .3s;pointer-events:none}
+        #dlx-fuel.on{opacity:1}#dlx-fuel i{position:absolute;left:0;top:0;bottom:0;background:linear-gradient(#ffe45a,#ff9a1a);border-right:2px solid #1a1a1a}#dlx-fuel b{position:absolute;inset:0;text-align:center;font:900 10px/10px var(--ui);letter-spacing:.2em;color:#1a1a1a;padding-top:0}`;
+      document.head.appendChild(st); gauge = document.createElement('div'); gauge.id = 'dlx-fuel'; gauge.innerHTML = '<i></i><b>JET FUEL</b>'; document.body.appendChild(gauge);
+    }
+    gauge.classList.toggle('on', show); gauge.firstChild.style.width = (S.fuel * 100).toFixed(1) + '%';
+  }
+
+  const _fw = new V3();
+  // before the player moves (40): thrust feeds PLAYER.vy, the air speed feeds PLAYER.moveScale
+  BA.onUpdate('jetpack', 39.9, (t, dt) => {
+    if (off || !S.pack) return;
+    if (S.stand) { const r = S.stand.userData.ring; r.rotation.y = t * 1.2; r.position.y = 2.2 + Math.sin(t * 2) * 0.15; if (S.demo) { S.demo.g.visible = !S.on; S.demo.g.rotation.y = t * 0.9; S.demo.g.position.y = S.standPos[1] + 3.4 + Math.sin(t * 1.6) * 0.25; } }
+    const ok = S.on && DLX.onFoot() && !(typeof COMBAT !== 'undefined' && COMBAT.dead > 0);
+    S.pack.visible = !!ok;
+    if (!ok) { S.flying = false; for (const f of S.flames) f.visible = false; gaugeUI(false); return; }
+    const f = PLAYER.fig, k = GAME.locked() ? {} : CAM.keys;
+    const want = !!k.Space && !PLAYER.grounded && S.fuel > 0 && (PLAYER.vy < 6 || S.flying);
+    if (PLAYER.grounded) { S.fuel = Math.min(1, S.fuel + dt / REFILL_S); S.air = 0; S.flying = false; }
+    else S.air += dt;
+    S.flying = want;
+    if (want) {
+      const climbCap = f.gy > CEIL ? 0 : CLIMB;
+      PLAYER.vy = Math.min(climbCap, PLAYER.vy + (THRUST + 38) * dt);
+      if (f.gy > CEIL && PLAYER.vy > 0) PLAYER.vy = 0;
+      S.fuel = Math.max(0, S.fuel - dt / FUEL_S); S.burn += dt; S.maxY = Math.max(S.maxY, f.gy - WORLD.y(f.x, f.z));
+      S.jetT -= dt; if (S.jetT <= 0) { S.jetT = 0.09; DLX.sfx('jet', { x: f.x, y: f.gy + 2, z: f.z }); }
+      S.puffT -= dt; if (S.puffT <= 0) { S.puffT = 0.07; _fw.set(Math.sin(f.yaw), 0, Math.cos(f.yaw)); for (const s of [-1, 1]) { const rx = Math.cos(f.yaw) * s * 0.46; FX.puff(f.x - _fw.x * 0.9 + rx, f.gy + 1.2, f.z - _fw.z * 0.9 - Math.sin(f.yaw) * s * 0.46, { n: 1, col: Math.random() < 0.5 ? 'white' : 'lgray', size: 0.55, up: -2.5, spread: 0.4, life: 0.8 }); } }
+    }
+    if (!PLAYER.grounded) PLAYER.moveScale = S.flying ? 1.55 : 1.25;
+    // the pack rides on your back
+    const sy = Math.sin(f.yaw), cy = Math.cos(f.yaw);
+    S.pack.position.set(f.x - sy * 0.72, f.gy + 2.38, f.z - cy * 0.72); S.pack.rotation.set(S.flying ? 0.12 : 0, f.yaw, 0);
+    for (const fl of S.flames) { fl.visible = S.flying; if (S.flying) { const s = 0.8 + Math.random() * 0.45; fl.scale.set(1, s, 1); } }
+    gaugeUI(S.flying || (S.fuel < 0.999 && !PLAYER.grounded) || (S.fuel < 0.999 && S.air === 0 && S.fuel < 0.98));
+  });
+  return { S, equip };
+})();
+
+/* ==== p74_fireworks.js ==== */
+/* FIREWORKS — every night between nine and half past eleven the harbour puts on a show over the bay: rockets whistle
+   up on sparkling trails and burst into peonies, rings, gold willows, crackling crossettes and — of course — the odd
+   2×4 BRICK drawn in sparks, studs and all.  Finish a quest and a volley goes up over your head (day or night), and
+   the fireworks crate on the quay launches a salvo for 10 studs.  Bursts light up the island for a moment.
+   API: FIREWORKS.launch(x, z, o) · FIREWORKS.volley(x, z, n) */
+const FIREWORKS = (() => {
+  const off = BA.flag('test') || /[?&]islandgp(?=&|=|$)/.test(location.search);
+  const MAX = 3600;
+  const S = { n: 0, pts: null, showT: 0, glow: 0, crate: null, cratePos: null, launched: 0 };
+  const px = new Float32Array(MAX), py = new Float32Array(MAX), pz = new Float32Array(MAX), vx = new Float32Array(MAX), vy = new Float32Array(MAX), vz = new Float32Array(MAX);
+  const cr = new Float32Array(MAX), cg = new Float32Array(MAX), cb = new Float32Array(MAX), life = new Float32Array(MAX), age = new Float32Array(MAX), size = new Float32Array(MAX), drag = new Float32Array(MAX), grav = new Float32Array(MAX), kind = new Uint8Array(MAX), bt = new Uint8Array(MAX), trailT = new Float32Array(MAX);
+  const PAL = [[3.2, 0.35, 0.25], [3.2, 2.4, 0.3], [0.45, 1.0, 3.4], [0.5, 3.0, 0.7], [3.0, 3.0, 3.0], [2.2, 0.6, 3.2], [3.4, 1.3, 0.2], [0.4, 2.6, 3.0]];
+  const TYPES = ['peony', 'peony', 'ring', 'willow', 'crossette', 'brick', 'peony', 'ring'];
+  function add(x, y, z, ux, uy, uz, c, L, sz, dr, gr, k, b = 0) {
+    if (S.n >= MAX) return -1; const i = S.n++;
+    px[i] = x; py[i] = y; pz[i] = z; vx[i] = ux; vy[i] = uy; vz[i] = uz; cr[i] = c[0]; cg[i] = c[1]; cb[i] = c[2]; life[i] = L; age[i] = 0; size[i] = sz; drag[i] = dr; grav[i] = gr; kind[i] = k; bt[i] = b; trailT[i] = 0; return i;
+  }
+  function kill(i) { const j = --S.n; if (i === j) return; px[i] = px[j]; py[i] = py[j]; pz[i] = pz[j]; vx[i] = vx[j]; vy[i] = vy[j]; vz[i] = vz[j]; cr[i] = cr[j]; cg[i] = cg[j]; cb[i] = cb[j]; life[i] = life[j]; age[i] = age[j]; size[i] = size[j]; drag[i] = drag[j]; grav[i] = grav[j]; kind[i] = kind[j]; bt[i] = bt[j]; trailT[i] = trailT[j]; }
+
+  /* a rocket: kind 1, bt = burst type index, colour = its burst colour */
+  function launch(x, z, o = {}) {
+    if (off || !S.pts) return;
+    const y0 = (o.y !== undefined ? o.y : Math.max(0, WORLD.y(x, z))) + 0.5, h = o.h || 52 + Math.random() * 26, t = 1.6 + Math.random() * 0.5;
+    const c = o.col || PAL[Math.floor(Math.random() * PAL.length)], type = o.type !== undefined ? o.type : TYPES[Math.floor(Math.random() * TYPES.length)];
+    add(x, y0, z, (Math.random() - 0.5) * 3, h / t + 5.5 * t * 0.5, (Math.random() - 0.5) * 3, c, t, 0.7, 0, 5.5, 1, TYPES.indexOf(type) >= 0 ? TYPES.indexOf(type) : 0);
+    DLX.sfx('launch', { x, y: y0, z, r: 60, max: 400 });
+    S.launched++;
+  }
+  const _r = new THREE.Vector3(), _u = new THREE.Vector3(0, 1, 0), _f = new THREE.Vector3();
+  function burst(i) {
+    const x = px[i], y = py[i], z = pz[i], c = [cr[i], cg[i], cb[i]], type = TYPES[bt[i]] || 'peony';
+    const c2 = PAL[Math.floor(Math.random() * PAL.length)];
+    if (type === 'peony') { const n = 110, sp = 15 + Math.random() * 4; for (let k = 0; k < n; k++) { const u = Math.random() * 2 - 1, a = Math.random() * M.TAU, s = Math.sqrt(1 - u * u), v = sp * (0.85 + Math.random() * 0.3); add(x, y, z, Math.cos(a) * s * v, u * v, Math.sin(a) * s * v, k % 5 === 0 ? c2 : c, 1.5 + Math.random() * 0.7, 0.6, 1.5, 6, 0); } }
+    else if (type === 'ring') { const n = 80, sp = 17; const ax = new THREE.Vector3(Math.random() - 0.5, Math.random() * 0.6, Math.random() - 0.5).normalize(); const b1 = new THREE.Vector3().crossVectors(ax, _u).normalize(); const b2 = new THREE.Vector3().crossVectors(ax, b1); for (let k = 0; k < n; k++) { const a = k / n * M.TAU, dx = b1.x * Math.cos(a) + b2.x * Math.sin(a), dy = b1.y * Math.cos(a) + b2.y * Math.sin(a), dz = b1.z * Math.cos(a) + b2.z * Math.sin(a); add(x, y, z, dx * sp, dy * sp, dz * sp, c, 1.7, 0.65, 1.3, 5, 0); } for (let k = 0; k < 14; k++) add(x, y, z, (Math.random() - 0.5) * 4, (Math.random() - 0.5) * 4, (Math.random() - 0.5) * 4, c2, 1.2, 0.8, 1, 3, 0); }
+    else if (type === 'willow') { const n = 120, gold = [3.2, 2.0, 0.55]; for (let k = 0; k < n; k++) { const u = Math.random() * 2 - 1, a = Math.random() * M.TAU, s = Math.sqrt(1 - u * u), v = 12 + Math.random() * 3; add(x, y, z, Math.cos(a) * s * v, u * v + 2, Math.sin(a) * s * v, gold, 2.8 + Math.random() * 0.8, 0.5, 2.2, 7.5, 2); } }
+    else if (type === 'crossette') { for (let k = 0; k < 14; k++) { const u = Math.random() * 2 - 1, a = Math.random() * M.TAU, s = Math.sqrt(1 - u * u), v = 13; add(x, y, z, Math.cos(a) * s * v, u * v, Math.sin(a) * s * v, c, 0.7 + Math.random() * 0.2, 0.8, 0.8, 5, 3); } }
+    else if (type === 'brick') {
+      // a 2x4 brick in sparks, facing the camera: the body outline, four studs on top
+      const cam = GFX.camera; _f.subVectors(cam.position, new THREE.Vector3(x, y, z)).setY(0).normalize(); _r.crossVectors(_u, _f).normalize();
+      const pts = [], W = 4, Hh = 1.2, per = (a, b, n) => { for (let k = 0; k < n; k++) pts.push([a[0] + (b[0] - a[0]) * k / n, a[1] + (b[1] - a[1]) * k / n]); };
+      per([-W / 2, -Hh / 2], [W / 2, -Hh / 2], 22); per([W / 2, -Hh / 2], [W / 2, Hh / 2], 8); per([W / 2, Hh / 2], [-W / 2, Hh / 2], 22); per([-W / 2, Hh / 2], [-W / 2, -Hh / 2], 8);
+      for (let s = 0; s < 4; s++) { const cx = -1.5 + s; for (let k = 0; k < 9; k++) { const a = Math.PI * k / 8; pts.push([cx + Math.cos(a) * 0.3, Hh / 2 + 0.05 + Math.sin(a) * 0.28]); } }
+      const col = [3.4, 0.5, 0.3], sc = 4.2;
+      for (const [a, b] of pts) add(x, y, z, _r.x * a * sc, b * sc + 0.5, _r.z * a * sc, col, 1.9, 0.75, 1.2, 1.2, 0);
+      for (let k = 0; k < 24; k++) add(x, y, z, (Math.random() - 0.5) * 6, (Math.random() - 0.5) * 6, (Math.random() - 0.5) * 6, [3, 2.8, 2.4], 0.8, 0.6, 1, 4, 0);
+    }
+    S.glow = Math.min(1.4, S.glow + 0.8);
+    const cam = GFX.camera.position, d = Math.hypot(x - cam.x, y - cam.y, z - cam.z);
+    DLX.sfx('firework', { x, y, z, r: 70, max: 600, delay: Math.min(2.2, d / 170) });
+  }
+  function volley(x, z, n = 5, o = {}) { for (let k = 0; k < n; k++) setTimeout(() => launch(x + (Math.random() - 0.5) * (o.spread || 10), z + (Math.random() - 0.5) * (o.spread || 10), { y: o.y, h: o.h }), k * (o.gap || 380)); }
+
+  /* the particles: one Points object, additive, drawn with a soft glow */
+  BA.build('fireworks', 93, (scene) => {
+    if (off) return;
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(MAX * 3), 3).setUsage(THREE.DynamicDrawUsage));
+    g.setAttribute('aCol', new THREE.BufferAttribute(new Float32Array(MAX * 3), 3).setUsage(THREE.DynamicDrawUsage));
+    g.setAttribute('aSize', new THREE.BufferAttribute(new Float32Array(MAX), 1).setUsage(THREE.DynamicDrawUsage));
+    S.U = { uScale: { value: 500 } };
+    const mat = new THREE.ShaderMaterial({ uniforms: S.U, blending: THREE.AdditiveBlending, transparent: true, depthWrite: false,
+      vertexShader: `attribute vec3 aCol; attribute float aSize; uniform float uScale; varying vec3 vC; void main(){ vec4 mv = modelViewMatrix * vec4(position, 1.0); gl_Position = projectionMatrix * mv; gl_PointSize = clamp(aSize * 1.5 * uScale / max(-mv.z, 0.5), 2.0, 72.0); vC = aCol; }`,
+      fragmentShader: `varying vec3 vC; void main(){ vec2 q = gl_PointCoord * 2.0 - 1.0; float r = dot(q, q); if (r > 1.0) discard; float a = exp(-r * 3.5); gl_FragColor = vec4(vC * a, 1.0); }` });
+    S.pts = new THREE.Points(g, mat); S.pts.frustumCulled = false; S.pts.renderOrder = 7; S.pts.name = 'fireworks'; scene.add(S.pts);
+    // the crate on the quay
+    const hb = LAYOUT.P.harbor; S.cratePos = DLX.openSpot(hb[0] - 6, hb[1] - 4, 2.5);
+    S.crate = DLX.model('fireworks crate', (b) => {
+      b.box(-1, 0, -1, 3, 3, 2, 'red'); b.plate(-1, 3, -1, 3, 2, 'yellow');
+      for (let k = 0; k < 3; k++) { b.tpl('cyl', -0.5 + k, 4, 0, ['blue', 'white', 'green'][k], { sx: 0.35, sz: 0.35, sy: 1.5 }); b.tpl('cone', -0.5 + k, 7.6, 0, 'red', { sx: 0.45, sz: 0.45, sy: 0.5 }); }
+      b.box(-1, 1, 1, 3, 1, 1, 'yellow', 0);
+    });
+    S.crate.position.set(S.cratePos[0], S.cratePos[1], S.cratePos[2]); scene.add(S.crate);
+    GAME.interact.add({ id: 'fireworks', pos: () => S.cratePos, r: 3.6, label: 'Launch fireworks! (10 studs)', act: () => {
+      if (GAME.save.studs < 10) { DLX.pop('Not enough studs', 'Fireworks cost 10 studs', { icon: '!', col: '#e0e0e0' }); return; }
+      GAME.addStuds(-10); GAME.flag('fireworks', (GAME.flag('fireworks') || 0) + 1); volley(hb[0] + 4, hb[1] + 16, 7, { spread: 26, gap: 420, y: 0.5 }); } });
+  });
+
+  // quest done → a volley over your head
+  if (!off && typeof GAME !== 'undefined') GAME.on('quest:done', () => { const p = GAME.playerPos(); if (p) setTimeout(() => volley(p[0], p[2], 5, { spread: 12, y: p[1], h: 34 }), 1200); });
+
+  const Wd = new THREE.Vector3();
+  BA.onUpdate('fireworks', 60, (t, dt) => {
+    if (off || !S.pts) return;
+    const inside = typeof INTERIOR !== 'undefined' && !!INTERIOR.cur;
+    // the nightly show over the bay
+    if (typeof DAYNIGHT !== 'undefined' && DAYNIGHT.S && !inside && DLX.play()) {
+      const h = DAYNIGHT.S.hour % 24, hb = LAYOUT.P.harbor, L = DLX.here();
+      if (h > 20.8 && h < 23.5 && DAYNIGHT.S.night > 0.6 && DAYNIGHT.S.W.rain < 0.3 && Math.hypot(L.x - hb[0], L.z - hb[1]) < 420) {
+        S.showT -= dt; if (S.showT <= 0) { S.showT = 1.1 + Math.random() * 2.4; launch(hb[0] + (Math.random() - 0.5) * 60, hb[1] + 18 + Math.random() * 20, { y: 0.5 }); if (Math.random() < 0.2) setTimeout(() => launch(hb[0] + (Math.random() - 0.5) * 60, hb[1] + 20 + Math.random() * 16, { y: 0.5 }), 250); }
+      }
+    }
+    // simulate
+    for (let i = S.n - 1; i >= 0; i--) {
+      age[i] += dt;
+      if (age[i] >= life[i]) {
+        if (kind[i] === 1) burst(i);
+        else if (kind[i] === 3) { for (let k = 0; k < 5; k++) { const a = k / 5 * M.TAU + Math.random(); add(px[i], py[i], pz[i], Math.cos(a) * 7, (Math.random() - 0.3) * 6, Math.sin(a) * 7, [cr[i], cg[i], cb[i]], 0.9, 0.5, 1.2, 5, 0); } }
+        kill(i); continue;
+      }
+      const dk = Math.exp(-drag[i] * dt); vx[i] *= dk; vy[i] *= dk; vz[i] *= dk; vy[i] -= grav[i] * dt;
+      px[i] += vx[i] * dt; py[i] += vy[i] * dt; pz[i] += vz[i] * dt;
+      if (kind[i] === 1 || kind[i] === 2) { trailT[i] -= dt; if (trailT[i] <= 0) { trailT[i] = kind[i] === 1 ? 0.018 : 0.06; add(px[i], py[i], pz[i], (Math.random() - 0.5) * 0.8, (Math.random() - 0.5) * 0.8 - 1, (Math.random() - 0.5) * 0.8, kind[i] === 1 ? [2.6, 1.6, 0.6] : [cr[i] * 0.6, cg[i] * 0.6, cb[i] * 0.6], kind[i] === 1 ? 0.45 : 0.7, 0.32, 2, 2, 0); } }
+    }
+    // upload
+    const g = S.pts.geometry, P = g.attributes.position.array, C = g.attributes.aCol.array, Z = g.attributes.aSize.array;
+    for (let i = 0; i < S.n; i++) {
+      const k = age[i] / life[i], fade = kind[i] === 1 ? 1 : (1 - k * k) * (k > 0.7 ? (0.6 + 0.4 * Math.sin(age[i] * 40 + i)) : 1);
+      P[i * 3] = px[i]; P[i * 3 + 1] = py[i]; P[i * 3 + 2] = pz[i]; C[i * 3] = cr[i] * fade; C[i * 3 + 1] = cg[i] * fade; C[i * 3 + 2] = cb[i] * fade; Z[i] = size[i] * (kind[i] === 0 ? 1 - k * 0.4 : 1);
+    }
+    g.attributes.position.needsUpdate = true; g.attributes.aCol.needsUpdate = true; g.attributes.aSize.needsUpdate = true; g.setDrawRange(0, S.n);
+    S.U.uScale.value = GFX.H * 0.5 * GFX.camera.projectionMatrix.elements[5];
+    S.pts.visible = !inside;
+    // bursts light the island for a moment (on top of the day/night light, which is rewritten every frame)
+    S.glow = Math.max(0, S.glow - dt * 2.2);
+    if (S.glow > 0.01 && typeof DAYNIGHT !== 'undefined' && DAYNIGHT.S.built && !inside) GFX.hemiI += S.glow * 0.35 * DAYNIGHT.S.night;
+    void Wd;
+  });
+  return { S, launch, volley };
+})();
+
+/* ==== p75_pet.js ==== */
+/* PET — BRICKSY, a brick-built beagle waiting by her little red doghouse in the park.  Adopt her (E) and she follows
+   you everywhere on foot: trots at your heel, gallops to catch up when you run, climbs a brick step like you do, sits
+   and wags when you stop, finds her own way back to you after a train ride or a trip indoors, and barks now and then.
+   Her nose is the best on the island: she sniffs out stud coins you haven't picked up yet — and, if you're close, the
+   hidden red bricks — runs over and barks at the spot.  E near her: a pat on the head (she loves that).
+   API: PET.S {adopted, x, z, y, state} */
+const PET = (() => {
+  const off = BA.flag('test') || /[?&]islandgp(?=&|=|$)/.test(location.search);
+  const S = { adopted: false, x: 0, y: 0, z: 0, yaw: 0, v: 0, cyc: 0, sit: 0, idleT: 0, stuckT: 0, barkT: 8, sniffT: 6, fetch: null, fetchT: 0, hop: 0, away: true, happy: 0, name: 'Bricksy', house: null, g: null };
+  const { cube, ball, seg, model, V3 } = DLX;
+  const cell = (y) => Math.floor(y / 0.4 + 1e-4);
+
+  function build(scene) {
+    const G = new THREE.Group(); G.name = 'pet';
+    const TAN = 'tan', BRN = 'brown', WH = 'white';
+    G.add(model('pet body', (b) => {
+      cube(b, 0, 1.35, 0, 1.3, 0.95, 2.3, TAN); cube(b, 0, 1.18, 0.98, 1.12, 0.62, 0.42, WH); cube(b, 0, 1.86, -0.25, 1.12, 0.1, 1.35, BRN);
+      cube(b, 0, 0.93, 0.1, 1.0, 0.1, 1.6, WH);
+    }));
+    const head = new THREE.Group(); head.position.set(0, 1.78, 1.12); G.add(head);
+    head.add(model('pet head', (b) => {
+      cube(b, 0, 0.36, 0.28, 1.0, 0.86, 0.95, TAN); cube(b, 0, 0.19, 0.94, 0.62, 0.42, 0.56, WH); cube(b, 0, 0.38, 1.2, 0.28, 0.18, 0.1, 'black');
+      cube(b, 0, 0.09, 1.08, 0.42, 0.05, 0.2, 'dkred');
+      for (const s of [-1, 1]) { ball(b, s * 0.25, 0.52, 0.76, 0.15, 0.17, 0.08, 'black'); ball(b, s * 0.22, 0.55, 0.79, 0.05, 0.05, 0.03, WH, { glow: true }); cube(b, s * 0.56, 0.62, 0.2, 0.16, 0.72, 0.46, BRN); }
+      cube(b, 0, -0.05, -0.02, 1.06, 0.16, 0.86, 'red'); ball(b, 0, -0.18, 0.44, 0.2, 0.2, 0.08, 'gold');
+    }));
+    const legs = [];
+    for (const [sx, sz] of [[-1, 1], [1, 1], [-1, -1], [1, -1]]) {
+      const L = new THREE.Group(); L.position.set(sx * 0.42, 1.0, sz * 0.78); G.add(L);
+      L.add(model('pet leg', (b) => { cube(b, 0, -0.5, 0, 0.36, 1.0, 0.36, TAN); cube(b, 0, -0.95, 0.05, 0.42, 0.12, 0.48, WH); }));
+      legs.push(L);
+    }
+    const tail = new THREE.Group(); tail.position.set(0, 1.72, -1.12); G.add(tail);
+    tail.add(model('pet tail', (b) => { seg(b, 'cyl', new V3(0, 0, 0), new V3(0, 0.5, -0.42), 0.1, TAN); ball(b, 0, 0.56, -0.47, 0.22, 0.22, 0.22, WH); }));
+    S.g = G; S.head = head; S.legs = legs; S.tail = tail; scene.add(G);
+    // the doghouse, by the fountain
+    S.home = DLX.openSpot(GAME.START_AT[0] - 11, GAME.START_AT[1] + 6, 3.5);
+    S.house = model('doghouse', (b) => {
+      b.box(-2, 0, -2, 4, 1, 4, 'dgray');
+      b.box(-2, 1, -2, 1, 6, 4, 'red'); b.box(1, 1, -2, 1, 6, 4, 'red'); b.box(-1, 1, -2, 2, 6, 1, 'red'); b.box(-1, 5, 1, 2, 2, 1, 'red');
+      b.slope(-2, 7, -2, 2, 4, 3, 'dkblue', 3, { top: 0 }); b.slope(0, 7, -2, 2, 4, 3, 'dkblue', 1, { top: 0 });
+      b.tpl('box', 0, 5.3, 2.05, 'white', { sx: 1.5, sy: 0.5, sz: 0.05 });
+      b.tpl('cyl', 3.2, 1, 1.2, 'lgray', { sx: 1.1, sz: 1.1, sy: 0.35 }); b.tpl('sphere', 3.0, 2.0, 1.1, 'white', { sx: 0.5, sy: 0.25, sz: 0.25 });   // bowl + bone
+    });
+    S.house.position.set(S.home[0], S.home[1], S.home[2]); S.house.rotation.y = 0; scene.add(S.house);
+    S.x = S.home[0] + 1.5; S.z = S.home[2] + 3.2; S.y = WORLD.ground(S.x, S.z, S.home[1] + 1.3); S.yaw = 0;
+    GAME.interact.add({ id: 'pet', pos: () => [S.x, S.y, S.z], r: 3.4, priority: (d) => (d < 2.5 ? 0.3 : 0), label: () => (S.adopted ? 'Pat ' + S.name : 'Adopt the puppy'), enabled: () => S.g.visible,
+      act: () => { if (!S.adopted) { S.adopted = true; GAME.flag('pet', 1); S.away = false; DLX.pop(S.name.toUpperCase() + ' IS YOURS!', 'She follows you everywhere on foot — and sniffs out studs you missed', { kicker: 'New friend', icon: '&#128054;', col: '#e8b86a' }); } pat(); } });
+  }
+  function pat() { S.happy = 3; S.hop = 0.01; DLX.sfx('bark', { x: S.x, y: S.y + 1.5, z: S.z }); FX.puff(S.x, S.y + 2.6, S.z, { n: 4, col: 'red', size: 0.45, up: 2.2, spread: 0.5, life: 1.1 }); }
+  BA.build('pet', 93, (scene) => { if (!off) build(scene); });
+  if (!off && typeof GAME !== 'undefined') GAME.on('phase', (d) => { if (d && d.phase === 'play') { S.adopted = !!GAME.save.flags.pet; S.away = true; S.fetch = null; } });
+
+  const wet = (x, z, g) => g < 0.5 && WORLD.isWater(x, z);
+  function blocked(x, z, y) { const g = WORLD.ground(x, z, y + 1.3); if (g - y > 1.3 || wet(x, z, g)) return true; const cx = Math.floor(x), cz = Math.floor(z); for (let c = cell(g + 1.35); c <= cell(g + 2.2); c++) if (BR.solid(cx, c, cz)) return true; return false; }
+  function placeNear(px, pz, py, yaw) {
+    for (const r of [2.8, 4, 1.8, 5.5]) for (let k = 0; k < 10; k++) {
+      const a = yaw + Math.PI + (k % 2 ? 1 : -1) * Math.ceil(k / 2) * 0.5, x = px + Math.sin(a) * r, z = pz + Math.cos(a) * r, g = WORLD.ground(x, z, py + 1.3);
+      if (Math.abs(g - py) < 2 && !blocked(x, z, g)) { S.x = x; S.z = z; S.y = g; S.yaw = yaw; FX.puff(x, g + 0.6, z, { n: 6, col: 'white', size: 0.8, up: 1.4, life: 0.8 }); return true; }
+    }
+    return false;
+  }
+  function nearestFind(px, pz) {
+    let best = null, bd = 1e9;
+    const H = typeof HUD !== 'undefined' ? HUD : null; if (!H) return null;
+    for (const c of H.coins || []) { if (c.got) continue; const d = Math.hypot(c.x - px, c.z - pz); if (d < 24 && d < bd) { bd = d; best = { x: c.x, z: c.z, y: c.g, kind: 'coin', ref: c }; } }
+    for (const b of H.bricks || []) { if (b.got || b.found) continue; const bx = b.x, bz = b.z; if (bx === undefined) continue; const d = Math.hypot(bx - px, bz - pz); if (d < 16 && d < bd + 6) { bd = d; best = { x: bx, z: bz, y: b.g || 0, kind: 'brick', ref: b }; } }
+    return best;
+  }
+
+  BA.onUpdate('pet', 51, (t, dt) => {
+    if (off || !S.g) return;
+    const G = S.g, inside = typeof INTERIOR !== 'undefined' && !!INTERIOR.cur;
+    S.house.visible = !inside;
+    let speed = 0, tx = S.x, tz = S.z, sitWant = false;
+    if (!S.adopted || !DLX.play()) {
+      // at home: sit by the doghouse, look at whoever's close
+      G.visible = !inside; sitWant = true;
+      const L = DLX.here(); if (Math.hypot(L.x - S.x, L.z - S.z) < 9) { S.yaw += M.angDiff(S.yaw, Math.atan2(L.x - S.x, L.z - S.z)) * Math.min(1, dt * 3); S.happy = Math.max(S.happy, 0.6); }
+      if (S.adopted && !DLX.play()) { S.x = S.home[0] + 1.5; S.z = S.home[2] + 3.2; S.y = WORLD.ground(S.x, S.z, S.home[1] + 1.3); }
+    } else if (!DLX.onFoot()) { G.visible = false; S.away = true; return; }
+    else {
+      const f = PLAYER.fig, fy = f.yaw, fwx = Math.sin(fy), fwz = Math.cos(fy);
+      if (S.away) { S.away = false; if (!placeNear(f.x, f.z, f.gy, fy)) { S.x = f.x; S.z = f.z; S.y = f.gy; } }
+      G.visible = true;
+      const dP = Math.hypot(f.x - S.x, f.z - S.z);
+      if (dP > 40 || Math.abs(f.gy - S.y) > 14) { placeNear(f.x, f.z, f.gy, fy); S.fetch = null; }
+      // sniffing
+      S.sniffT -= dt; if (S.sniffT <= 0 && !S.fetch) { S.sniffT = 9 + Math.random() * 6; const c = nearestFind(f.x, f.z); if (c) { S.fetch = c; S.fetchT = 16; S.told = false; } }
+      if (S.fetch) {
+        const c = S.fetch; if ((c.ref && (c.ref.got || c.ref.found)) || (S.fetchT -= dt) <= 0 || Math.hypot(c.x - f.x, c.z - f.z) > 34) { S.fetch = null; }
+        else { tx = c.x - Math.sin(Math.atan2(c.x - S.x, c.z - S.z)) * 1.4; tz = c.z - Math.cos(Math.atan2(c.x - S.x, c.z - S.z)) * 1.4; }
+      }
+      if (!S.fetch) { tx = f.x - fwx * 2.9 + fwz * 1.3; tz = f.z - fwz * 2.9 - fwx * 1.3; }
+      const d = Math.hypot(tx - S.x, tz - S.z);
+      if (S.fetch && d < 1.2) { speed = 0; S.yaw += M.angDiff(S.yaw, Math.atan2(S.fetch.x - S.x, S.fetch.z - S.z)) * Math.min(1, dt * 6); if (!S.told) { S.told = true; S.barkT = 0; if (!GAME.flag('petFound')) { GAME.flag('petFound', 1); DLX.pop(S.name + ' found something!', S.fetch.kind === 'brick' ? 'Is that… a red brick?!' : 'Follow the barking — there are studs here', { icon: '&#128062;', col: '#e8b86a' }); } } if (S.barkT <= 0) { S.barkT = 1.6; DLX.sfx('bark', { x: S.x, y: S.y + 1.5, z: S.z }); S.hop = 0.01; } }
+      else speed = d > 1.1 ? M.clamp(d * 2.4, 2, dP > 10 ? 15 : 12.5) : 0;
+      sitWant = speed < 0.1 && PLAYER.speed < 0.5 && !S.fetch; S.idleT = sitWant ? S.idleT + dt : 0;
+      if (speed > 0.1) {
+        const a = Math.atan2(tx - S.x, tz - S.z); S.yaw += M.angDiff(S.yaw, a) * Math.min(1, dt * 8);
+        const step = Math.min(d, speed * dt), mx = Math.sin(S.yaw) * step, mz = Math.cos(S.yaw) * step; let moved = false;
+        for (const [ax, az] of [[mx, mz], [mx, 0], [0, mz]]) { if (!ax && !az) continue; if (!blocked(S.x + ax, S.z + az, S.y)) { S.x += ax; S.z += az; moved = true; break; } }
+        S.stuckT = moved ? 0 : S.stuckT + dt; if (S.stuckT > 1.2 && dP > 4) { placeNear(f.x, f.z, f.gy, fy); S.stuckT = 0; }
+      }
+      // barking now and then
+      S.barkT -= dt; if (S.barkT <= 0 && !S.fetch) { S.barkT = 14 + Math.random() * 20; if (dP < 20) DLX.sfx('bark', { x: S.x, y: S.y + 1.5, z: S.z }); }
+      if (PLAYER.vy > 8 && PLAYER.grounded === false && S.hop === 0 && dP < 5) S.hop = 0.01;   // jumps with you
+    }
+    // ground + hop
+    const g = WORLD.ground(S.x, S.z, S.y + 1.3); S.y = g > S.y ? g : Math.max(g, S.y - dt * 20);
+    let hy = 0; if (S.hop > 0) { S.hop += dt; hy = Math.sin(Math.min(1, S.hop / 0.45) * Math.PI) * 1.1; if (S.hop > 0.45) S.hop = 0; }
+    // animation
+    S.v += (speed - S.v) * Math.min(1, dt * 8); S.cyc += S.v * dt * 1.6;
+    S.sit += ((sitWant && S.idleT > 1.5) || (!S.adopted || !DLX.play()) ? dt * 3 : -dt * 5); S.sit = M.clamp(S.sit, 0, 1);
+    S.happy = Math.max(0, S.happy - dt * 0.4);
+    const sw = Math.min(1, S.v / 6) * 0.75, sit = S.sit;
+    S.legs.forEach((L, i) => { const front = i < 2, ph = (i === 0 || i === 3 ? 0 : Math.PI); L.rotation.x = Math.sin(S.cyc + ph) * sw + (front ? 0 : -sit * 1.2); L.position.y = 1.0 - (front ? 0 : sit * 0.1); });
+    S.tail.rotation.y = Math.sin(t * (S.happy > 0.5 || sit > 0.5 ? 14 : 6)) * (0.35 + Math.min(1, S.happy) * 0.35); S.tail.rotation.x = -0.2 + sit * 0.5;
+    S.head.rotation.x = -sit * 0.25 + Math.sin(S.cyc * 2) * sw * 0.06; S.head.rotation.y = S.fetch ? 0 : Math.sin(t * 0.7) * 0.25 * (1 - Math.min(1, S.v / 3));
+    G.position.set(S.x, S.y + hy + Math.abs(Math.sin(S.cyc)) * sw * 0.12 + sit * 0.3, S.z); G.rotation.set(-sit * 0.38, S.yaw, 0, 'YXZ');
+  });
+  return { S, pat };
+})();
+
+/* ==== p76_trophies.js ==== */
+/* TROPHIES — thirty-three things to do on the island, from your first hundred studs of walking to the Rock Monster
+   King.  Each one pops up a card with a fanfare when you earn it; the pause menu's TROPHIES page is the trophy room
+   (earned ones in gold, the rest with a hint).  Kept in the save: GAME.save.flags['tr:<id>'], plus a few running totals
+   (dlxWalk, dlxKills, dlxJet, dlxHigh).  API: TROPHIES.list · TROPHIES.award(id) · TROPHIES.open() */
+const TROPHIES = (() => {
+  const off = BA.flag('test') || /[?&]islandgp(?=&|=|$)/.test(location.search);
+  const F = () => (typeof GAME !== 'undefined' && GAME.save ? GAME.save.flags : {});
+  const num = (k) => +(F()[k] || 0);
+  const qDone = () => { const s = GAME.save.quests || {}; return Object.keys(s).filter((k) => s[k] && s[k].state === 'done').length; };
+  const qAll = () => { const Q = GAME.mod('quest'); try { const L = Q && Q.list ? Q.list() : []; return L.length > 0 && L.every((q) => q.state === 'done'); } catch (e) { return false; } };
+  const gear = () => (typeof COMBAT !== 'undefined' && COMBAT.ORDER ? COMBAT.ORDER.filter((g) => g !== 'fists' && COMBAT.owned && COMBAT.owned(g)).length : 0);
+  const LANDS = ['town', 'castle', 'forest', 'fright', 'rock', 'space', 'desert', 'island', 'pirate'];
+  const lands = () => LANDS.filter((l) => F()['land:' + l]).length;
+  const T = [
+    ['firstSteps', 'First Steps', 'Walk 100 studs', '&#128099;', () => num('dlxWalk') >= 100],
+    ['marathon', 'Marathon Minifig', 'Walk 5,000 studs', '&#127939;', () => num('dlxWalk') >= 5000],
+    ['studs1k', 'Pocket Money', 'Hold 1,000 studs', '&#9679;', () => GAME.save.studs >= 1000],
+    ['studs10k', 'Stud Tycoon', 'Hold 10,000 studs', '&#9673;', () => GAME.save.studs >= 10000],
+    ['studs50k', 'Brick Billionaire', 'Hold 50,000 studs', '&#128176;', () => GAME.save.studs >= 50000],
+    ['red1', 'Something Red', 'Find a hidden red brick', '&#129521;', () => (GAME.save.redBricks || []).length >= 1],
+    ['red10', 'Red Brick Collector', 'Find all ten red bricks', '&#127942;', () => (GAME.save.redBricks || []).length >= 10],
+    ['quest1', 'Helping Hand', 'Complete a quest', '&#10004;', () => qDone() >= 1],
+    ['quest5', 'Hero of the Island', 'Complete five quests', '&#9876;', () => qDone() >= 5],
+    ['questAll', 'Legend of the Brick Ages', 'Complete every quest', '&#128081;', () => qAll()],
+    ['lands', 'Grand Tourist', 'Set foot in all nine lands', '&#127758;', () => lands() >= 9],
+    ['sets', 'Set Collector', 'Walk into five of the classic sets', '&#127968;', () => typeof INTERIOR !== 'undefined' && INTERIOR.setsFound && INTERIOR.setsFound() >= 5],
+    ['train', 'All Aboard!', 'Ride the 9V Express', '&#128646;', () => !!F()['tr_train']],
+    ['car', 'Sunday Driver', 'Drive the Town pickup', '&#128663;', () => !!F()['tr_car']],
+    ['horse', 'Saddle Up', 'Ride the horse by the jousting lists', '&#128052;', () => !!F()['tr_horse']],
+    ['boat', 'Sea Legs', 'Take a boat out', '&#9973;', () => !!F()['tr_boat']],
+    ['kills10', 'Monster Masher', 'Defeat 10 creatures', '&#128165;', () => num('dlxKills') >= 10],
+    ['kills100', 'Brick Breaker', 'Defeat 100 creatures', '&#128481;', () => num('dlxKills') >= 100],
+    ['king', 'King Slayer', 'Defeat the Rock Monster King', '&#128142;', () => !!F()['tr_king']],
+    ['respawn', 'Brick by Brick', 'Fall apart and snap back together', '&#129513;', () => !!F()['tr_respawn']],
+    ['gear', 'Armed and Ready', 'Collect four pieces of land gear', '&#128737;', () => gear() >= 4],
+    ['builder', 'Master Builder', "Build 50 bricks at Builder's Bay", '&#129521;', () => num('dlxBuilt') >= 50],
+    ['jet', 'Rocket Minifig', 'Fly the jetpack for 30 seconds', '&#128640;', () => num('dlxJet') >= 30],
+    ['jetHigh', 'Sky High', 'Fly 100 studs above the ground', '&#9729;', () => num('dlxHigh') >= 100],
+    ['pet', 'Best Friends', 'Adopt Bricksy', '&#128054;', () => !!F().pet],
+    ['petFind', 'Good Nose!', 'Let Bricksy sniff out a treasure', '&#128062;', () => !!F().petFound],
+    ['night', 'Night Owl', 'Be out and about at midnight', '&#127769;', () => !!F()['tr_night']],
+    ['storm', 'Singing in the Rain', 'Get caught in a thunderstorm', '&#9928;', () => !!F()['tr_storm']],
+    ['rainbow', 'Over the Rainbow', 'See a rainbow after the rain', '&#127752;', () => !!F()['tr_rainbow']],
+    ['snow', 'Brick Christmas', 'Stand in falling snow', '&#10052;', () => !!F()['tr_snow']],
+    ['fireworks', 'Pyrotechnician', 'Launch fireworks from the quay', '&#127878;', () => num('fireworks') >= 1],
+    ['racer', 'Brickspeed Champion', 'Win a race at the Brickspeed Raceway', '&#127937;', () => GAME.unlocked && !!GAME.save.unlocks['print:racer']],
+    ['mark', 'Creative Visit', 'Find the creative lab by the river', '&#127912;', () => GAME.unlocked && !!GAME.save.unlocks['face:markBeard']],
+  ];
+  const has = (id) => !!F()['tr:' + id];
+  function award(id) {
+    const t = T.find((x) => x[0] === id); if (!t || has(id)) return false;
+    F()['tr:' + id] = Date.now();
+    const n = T.filter((x) => has(x[0])).length;
+    DLX.pop(t[1], `${t[2]} <span style="color:#888">· ${n}/${T.length}</span>`, { kicker: 'Trophy unlocked', icon: t[3], col: '#ffd21a', ms: 6000 });
+    DLX.sfx('trophy', {});
+    if (GAME.store) GAME.store();
+    return true;
+  }
+
+  /* running totals + event flags */
+  const O = { lx: null, lz: null, dead: 0, built: null, chkT: 0 };
+  if (!off && typeof GAME !== 'undefined') {
+    GAME.on('train:board', () => { F().tr_train = 1; });
+    GAME.on('vehicle:enter', () => { const D = GAME.mod('drive'); const k = D && D.kind ? D.kind() : null; if (k) F()['tr_' + k] = 1; });
+    GAME.on('phase', (d) => { if (d && d.phase === 'play') { O.lx = null; O.dead = 0; O.built = null; } });
+  }
+  if (!off && typeof COMBAT !== 'undefined' && COMBAT.onKill) COMBAT.onKill((E) => { if (!DLX.play()) return; F().dlxKills = num('dlxKills') + 1; if (E && E.T && E.T.boss) F().tr_king = 1; });
+
+  BA.onUpdate('trophies', 66, (t, dt) => {
+    if (off || !DLX.play()) return;
+    const f = PLAYER.active && PLAYER.fig;
+    if (f && !PLAYER.driving) { if (O.lx !== null) { const d = Math.hypot(f.x - O.lx, f.z - O.lz); if (d < 5 && PLAYER.grounded) F().dlxWalk = num('dlxWalk') + d; } O.lx = f.x; O.lz = f.z; } else O.lx = null;
+    if (typeof COMBAT !== 'undefined') { if (O.dead && !(COMBAT.dead > 0)) F().tr_respawn = 1; O.dead = COMBAT.dead > 0; }
+    if (typeof JETPACK !== 'undefined') { const J = JETPACK.S; if (J.flying) F().dlxJet = num('dlxJet') + dt; if (J.maxY > num('dlxHigh')) F().dlxHigh = Math.round(J.maxY); }
+    if (typeof BUILD !== 'undefined' && BUILD.S && BUILD.S.active && BUILD._count) { const n = BUILD._count(); if (O.built !== null && n > O.built) F().dlxBuilt = num('dlxBuilt') + (n - O.built); O.built = n; } else O.built = null;
+    const z = typeof UI !== 'undefined' ? UI.S.zone : null; if (z && LANDS.includes(z)) F()['land:' + z] = 1;
+    if (typeof DAYNIGHT !== 'undefined' && DAYNIGHT.S && !(typeof INTERIOR !== 'undefined' && INTERIOR.cur)) {
+      const D = DAYNIGHT.S, h = D.hour % 24;
+      if (h >= 23.9 || h < 0.6) F().tr_night = 1;
+      if (D.W.kind === 'storm' && D.W.rain > 0.6) F().tr_storm = 1;
+      if (D.W.rainbow > 0.5 && D.sunEl > 3) F().tr_rainbow = 1;
+      if (D.W.snow > 0.5) F().tr_snow = 1;
+    }
+    O.chkT -= dt; if (O.chkT > 0) return; O.chkT = 1;
+    for (const x of T) { if (has(x[0])) continue; let ok = false; try { ok = x[4](); } catch (e) { ok = false; } if (ok) { award(x[0]); break; } }   // one card at a time
+  });
+
+  /* the trophy room */
+  let root = null;
+  function open() {
+    if (!root) {
+      const st = document.createElement('style'); st.textContent = `
+        #dlx-tr{position:fixed;inset:0;z-index:66;display:none;align-items:center;justify-content:center;background:radial-gradient(ellipse at center,rgba(6,18,50,.35) 0,rgba(6,18,50,.72) 100%)}
+        #dlx-tr.on{display:flex}
+        #dlx-tr .card{color:#1a1a1a;width:min(860px,94vw);max-height:88vh;display:flex;flex-direction:column;background:#fffdf5;border:4px solid #1a1a1a;border-radius:16px;box-shadow:0 8px 0 #1a1a1a,0 24px 60px rgba(0,0,0,.45);overflow:hidden}
+        #dlx-tr .hd{background:#ffd21a;border-bottom:4px solid #1a1a1a;padding:14px 20px;display:flex;justify-content:space-between;align-items:baseline;gap:10px}
+        #dlx-tr .hd b{font:900 italic 32px var(--chunky);color:#1a1a1a;text-shadow:2px 2px 0 #fff}
+        #dlx-tr .hd span{font:800 13px var(--ui);color:#1a1a1a;letter-spacing:.06em}
+        #dlx-tr .gr{overflow-y:auto;padding:16px;display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:10px}
+        #dlx-tr .t{color:#1a1a1a;display:flex;gap:10px;align-items:center;border:3px solid #1a1a1a;border-radius:10px;padding:8px;background:#fff;box-shadow:0 3px 0 #1a1a1a}
+        #dlx-tr .t .i{flex:none;width:40px;height:40px;border-radius:8px;border:3px solid #1a1a1a;background:#ffd21a;display:flex;align-items:center;justify-content:center;font-size:20px}
+        #dlx-tr .t.no{background:#eeeae0;box-shadow:0 3px 0 #9a968c;border-color:#9a968c}#dlx-tr .t.no .i{background:#d6d2c8;border-color:#9a968c;filter:grayscale(1);opacity:.55}
+        #dlx-tr .t b{display:block;font:900 13px var(--ui)}#dlx-tr .t small{display:block;font:600 11px var(--ui);color:#555;margin-top:2px}
+        #dlx-tr .ft{border-top:3px solid #1a1a1a;padding:10px 16px;display:flex;justify-content:flex-end}
+        #dlx-tr .ft div{color:#1a1a1a;cursor:pointer;background:#fff;border:3px solid #1a1a1a;border-radius:9px;padding:6px 16px;font:900 14px var(--ui);box-shadow:0 3px 0 #1a1a1a}`;
+      document.head.appendChild(st);
+      root = document.createElement('div'); root.id = 'dlx-tr'; document.body.appendChild(root);
+      root.addEventListener('pointerdown', (e) => { if (e.target === root) close(); });
+    }
+    const n = T.filter((x) => has(x[0])).length;
+    root.innerHTML = `<div class="card"><div class="hd"><b>TROPHY ROOM</b><span>${n} / ${T.length} earned</span></div><div class="gr">${T.map((x) => `<div class="t ${has(x[0]) ? '' : 'no'}"><div class="i">${x[3]}</div><div><b>${x[1]}</b><small>${x[2]}</small></div></div>`).join('')}</div><div class="ft"><div id="dlx-tr-x">Close &nbsp;<kbd>Esc</kbd></div></div></div>`;
+    root.querySelector('#dlx-tr-x').addEventListener('click', close);
+    root.classList.add('on'); GAME.modal.open({ id: 'trophies', close });
+  }
+  function close() { if (root) root.classList.remove('on'); if (GAME.modal.isOpen('trophies')) GAME.modal.close('trophies'); }
+  if (!off) DLX.pauseItem({ a: 'trophies', t: 'Trophy Room', cls: '', act: () => open() });
+  return { list: T, award, open, close, has };
+})();
+
+/* ==== p77_minimap.js ==== */
+/* MINIMAP — a round radar in the bottom-right corner while you play: the island map (the same booklet-style image as
+   the big M map) turns with your camera so "up" is always where you're looking; your arrow in the middle, the quest
+   target as a star (pinned to the rim when it's far), your vehicles, the train, Bricksy and the jetpack stand; N on the
+   rim, the land's name + the clock on top.  Click it for the big map.  Settings: Minimap on / off.
+   API: MINIMAP.S {on, zoom} */
+const MINIMAP = (() => {
+  const off = BA.flag('test') || /[?&]islandgp(?=&|=|$)/.test(location.search);
+  const S = { on: true, zoom: 1.7, base: null, el: null, cv: null, g: null, acc: 0, D: 164 };
+  try { const v = localStorage.getItem('brickages.minimap.v1'); if (v === '0') S.on = false; } catch (e) { /* */ }
+  const setOn = (v) => { S.on = !!v; try { localStorage.setItem('brickages.minimap.v1', S.on ? '1' : '0'); } catch (e) { /* */ } };
+  const ZN = { town: 'TOWN', castle: 'CASTLE', forest: 'FORESTMEN', fright: 'FRIGHT KNIGHTS', rock: 'ROCK RAIDERS', space: 'SPACE', desert: 'WILD WEST', island: 'ISLANDERS', pirate: 'PIRATES', bay: "BUILDER'S BAY" };
+
+  BA.build('minimap', 98, () => {
+    if (off) return;
+    const st = document.createElement('style'); st.textContent = `
+      #dlx-mini{position:fixed;right:16px;bottom:16px;z-index:44;width:${S.D + 8}px;display:none;flex-direction:column;align-items:center;gap:6px;pointer-events:none}
+      body.ph-play #dlx-mini.on{display:flex}
+      #dlx-mini .ring{position:relative;width:${S.D + 8}px;height:${S.D + 8}px;border-radius:50%;border:4px solid #1a1a1a;background:#0b2b66;box-shadow:0 5px 0 #1a1a1a,0 12px 26px rgba(0,0,0,.35);overflow:hidden;pointer-events:auto;cursor:pointer}
+      #dlx-mini canvas{display:block;width:${S.D}px;height:${S.D}px}
+      #dlx-mini .zn{font:900 italic 12px var(--chunky);letter-spacing:.06em;color:#fff;text-shadow:2px 2px 0 #1a1a1a,-1px -1px 0 #1a1a1a,1px -1px 0 #1a1a1a,-1px 1px 0 #1a1a1a;white-space:nowrap}
+      body.ph-play #dlx-clock{position:static;transform:none;order:-1}`;
+    document.head.appendChild(st);
+    const el = document.createElement('div'); el.id = 'dlx-mini'; el.innerHTML = `<div class="ring"><canvas></canvas></div><div class="zn"></div>`;
+    (document.getElementById('ui') || document.body).appendChild(el);
+    S.el = el; S.cv = el.querySelector('canvas'); S.zn = el.querySelector('.zn');
+    const dpr = Math.min(2, window.devicePixelRatio || 1); S.dpr = dpr; S.cv.width = S.cv.height = Math.round(S.D * dpr); S.g = S.cv.getContext('2d');
+    el.querySelector('.ring').addEventListener('click', () => { const H = GAME.mod('hud'); if (H && H.openMap && !GAME.locked()) H.openMap(); });
+    // the clock rides on top of the minimap while playing
+    const ck = document.getElementById('dlx-clock'); if (ck) el.insertBefore(ck, el.firstChild);
+    try { S.base = HUD.mapBase(); } catch (e) { console.error('minimap base', e); }
+  });
+
+  const _d = new THREE.Vector3();
+  function star(g, x, y, r, fill, stroke) { g.beginPath(); for (let k = 0; k < 10; k++) { const rr = k % 2 ? r * 0.45 : r, a = k / 10 * M.TAU - Math.PI / 2; g.lineTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr); } g.closePath(); g.fillStyle = fill; g.fill(); g.lineWidth = 2; g.strokeStyle = stroke; g.stroke(); }
+  function dot(g, x, y, r, fill, txt) { g.beginPath(); g.arc(x, y, r, 0, M.TAU); g.fillStyle = fill; g.fill(); g.lineWidth = 2; g.strokeStyle = '#1a1a1a'; g.stroke(); if (txt) { g.fillStyle = '#1a1a1a'; g.font = `900 ${Math.round(r * 1.3)}px Arial`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(txt, x, y + 0.5); } }
+  function draw() {
+    const g = S.g, dpr = S.dpr, D = S.D * dpr, c = D / 2, R = c - 2, s = S.zoom * dpr, N = WORLD.N, HALF = WORLD.HALF;
+    const p = GAME.playerPos(); if (!p) return; const px = p[0], pz = p[2];
+    GFX.camera.getWorldDirection(_d); const th = -Math.PI / 2 - Math.atan2(_d.z, _d.x);
+    const cs = Math.cos(th), sn = Math.sin(th);
+    const scr = (x, z) => { const dx = (x - px) * s, dz = (z - pz) * s; return [c + dx * cs - dz * sn, c + dx * sn + dz * cs]; };
+    g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, D, D);
+    g.save(); g.beginPath(); g.arc(c, c, R, 0, M.TAU); g.clip();
+    g.fillStyle = '#1c5fb8'; g.fillRect(0, 0, D, D);
+    if (S.base) { g.save(); g.translate(c, c); g.rotate(th); g.scale(s, s); g.translate(-(px + HALF), -(pz + HALF)); g.imageSmoothingEnabled = false; g.drawImage(S.base, 0, 0, N, N); g.restore(); }
+    // night: the map dims a touch
+    if (typeof DAYNIGHT !== 'undefined' && DAYNIGHT.S) { const n = DAYNIGHT.S.night; if (n > 0.02) { g.fillStyle = `rgba(8,14,40,${(n * 0.45).toFixed(3)})`; g.fillRect(0, 0, D, D); } }
+    // markers
+    const D0 = GAME.mod('drive'); if (D0 && D0.markers) { try { for (const m of D0.markers()) { if (m.kind === 'gate' || m.kind === 'race' || m.kind === 'dock') continue; const [x, y] = scr(m.x, m.z); if (Math.hypot(x - c, y - c) < R - 6) dot(g, x, y, 5.5 * dpr, m.kind === 'car' ? '#d8262a' : m.kind === 'horse' ? '#a0703a' : '#4a90e2'); } } catch (e) { /* */ } }
+    if (typeof TRAIN !== 'undefined' && TRAIN.cars && TRAIN.cars[0]) { const q = TRAIN.cars[0].position, [x, y] = scr(q.x, q.z); if (Math.hypot(x - c, y - c) < R - 6) { g.fillStyle = '#f2f3f0'; g.strokeStyle = '#1a1a1a'; g.lineWidth = 2; g.fillRect(x - 6 * dpr, y - 4 * dpr, 12 * dpr, 8 * dpr); g.strokeRect(x - 6 * dpr, y - 4 * dpr, 12 * dpr, 8 * dpr); } }
+    if (typeof JETPACK !== 'undefined' && JETPACK.S.standPos && !JETPACK.S.owned) { const q = JETPACK.S.standPos, [x, y] = scr(q[0], q[2]); if (Math.hypot(x - c, y - c) < R - 6) dot(g, x, y, 6 * dpr, '#ffd21a', 'J'); }
+    if (typeof PET !== 'undefined' && PET.S.g && PET.S.g.visible) { const [x, y] = scr(PET.S.x, PET.S.z); if (Math.hypot(x - c, y - c) < R - 6) dot(g, x, y, 4.5 * dpr, '#e8b86a'); }
+    // quest target: a star, pinned to the rim when it's out of range
+    const Q = GAME.mod('quest'); let tr = null; try { tr = Q && Q.tracked ? Q.tracked() : null; } catch (e) { /* */ }
+    if (tr && tr.target) { let [x, y] = scr(tr.target[0], tr.target[2]); const dd = Math.hypot(x - c, y - c); if (dd > R - 10) { x = c + (x - c) / dd * (R - 10); y = c + (y - c) / dd * (R - 10); } star(g, x, y, 8 * dpr, '#ffd21a', '#d8262a'); }
+    g.restore();
+    // rim: N
+    { const a = th - Math.PI / 2, x = c + Math.cos(a) * (R - 11 * dpr), y = c + Math.sin(a) * (R - 11 * dpr); dot(g, x, y, 8 * dpr, '#fffdf5', 'N'); }
+    // you
+    const f = PLAYER.fig, yaw = PLAYER.driving && D0 && D0.S && D0.S.cur ? D0.S.cur.yaw || 0 : f ? f.yaw : 0;
+    g.save(); g.translate(c, c); g.rotate(th + Math.atan2(Math.cos(yaw), Math.sin(yaw)) + Math.PI / 2); g.scale(dpr, dpr);
+    g.beginPath(); g.moveTo(0, -10); g.lineTo(7, 7); g.lineTo(0, 3.5); g.lineTo(-7, 7); g.closePath(); g.fillStyle = '#ffd21a'; g.strokeStyle = '#1a1a1a'; g.lineWidth = 2.5; g.lineJoin = 'round'; g.fill(); g.stroke(); g.restore();
+  }
+  BA.onUpdate('minimap', 65, (t, dt) => {
+    if (off || !S.el) return;
+    const show = S.on && DLX.play() && !(typeof INTERIOR !== 'undefined' && INTERIOR.cur) && !(typeof BUILD !== 'undefined' && BUILD.S && BUILD.S.active) && !(GAME.mod('hud') && GAME.mod('hud').mapOn);
+    S.el.classList.toggle('on', show); if (!show) return;
+    S.acc += dt; if (S.acc < 1 / 20) return; S.acc = 0;
+    try { draw(); } catch (e) { if (!S.err) { S.err = true; console.error('minimap', e); } }
+    const z = typeof UI !== 'undefined' ? UI.S.zone : null, zn = z && ZN[z] ? ZN[z] : ''; if (S.zn.textContent !== zn) S.zn.textContent = zn;
+  });
+  return { S, setOn };
+})();
+
+/* ==== p79_settings.js ==== */
+/* SETTINGS (Deluxe) — extra rows in the pause menu's Settings page: music / effects / ambience volume, time of day,
+   day length, weather and the minimap.  Everything saves per browser (like the original's graphics settings). */
+(() => {
+  if (BA.flag('test') || typeof GAME === 'undefined') return;
+  BA.build('deluxe settings css', 97, () => {
+    const st = document.createElement('style'); st.textContent = `
+      .mn-set.dlx-h{border-bottom:3px solid #1a1a1a;padding:14px 0 6px}.mn-set.dlx-h .l{font:900 italic 18px var(--chunky);color:#d8262a}
+      .dlx-rng{-webkit-appearance:none;appearance:none;width:170px;height:14px;border:3px solid #1a1a1a;border-radius:8px;background:linear-gradient(90deg,#ffd21a var(--v,50%),#fff var(--v,50%));box-shadow:0 2px 0 #1a1a1a;cursor:pointer}
+      .dlx-rng::-webkit-slider-thumb{-webkit-appearance:none;width:20px;height:24px;border-radius:5px;background:#d8262a;border:3px solid #1a1a1a;box-shadow:0 2px 0 #1a1a1a}
+      .dlx-rng::-moz-range-thumb{width:16px;height:20px;border-radius:5px;background:#d8262a;border:3px solid #1a1a1a}`;
+    document.head.appendChild(st);
+  });
+  const seg = (key, cur, opts) => `<div class="mn-seg">${opts.map(([v, t]) => `<div class="bbtn ${String(cur) === String(v) ? 'on' : 'white'}" data-x="${key}" data-v="${v}">${t}</div>`).join('')}</div>`;
+  const row = (label, hint, ctl) => `<div class="mn-set"><div class="l">${label}<small>${hint}</small></div>${ctl}</div>`;
+  const rng = (key, v) => `<input type="range" class="dlx-rng" min="0" max="100" value="${Math.round(v * 100)}" data-r="${key}" style="--v:${Math.round(v * 100)}%">`;
+  DLX.setting({
+    html() {
+      let h = `<div class="mn-set dlx-h"><div class="l">DELUXE</div></div>`;
+      if (typeof AUDIO !== 'undefined') {
+        const V = AUDIO.S.vol;
+        h += row('Sound', 'N toggles it any time', seg('mute', AUDIO.S.muted ? 1 : 0, [[0, 'On'], [1, 'Off']]));
+        h += row('Music', 'a little band for every land', rng('music', V.music));
+        h += row('Effects', 'footsteps, studs, swords, bricks', rng('sfx', V.sfx));
+        h += row('Ambience', 'surf, wind, birds, crickets, rain', rng('amb', V.amb));
+      }
+      if (typeof DAYNIGHT !== 'undefined') {
+        const D = DAYNIGHT.S;
+        h += row('Time of day', 'Cycle lets the sun go round', seg('tod', D.mode, [['cycle', 'Cycle'], [8, 'Morning'], [12.5, 'Noon'], [16.5, 'Golden'], [18.7, 'Sunset'], [23, 'Night']]));
+        h += row('Day length', 'one full day and night', seg('day', D.dayMin, [[12, '12 min'], [24, '24 min'], [48, '48 min']]));
+        h += row('Weather', 'Auto: showers, storms, snow, rainbows', seg('wx', D.wxMode, [['auto', 'Auto'], ['clear', 'Clear'], ['rain', 'Rain'], ['storm', 'Storm'], ['snow', 'Snow']]));
+      }
+      if (typeof MINIMAP !== 'undefined') h += row('Minimap', 'bottom right · click it for the big map', seg('mini', MINIMAP.S.on ? 1 : 0, [[1, 'On'], [0, 'Off']]));
+      return h;
+    },
+    bind(box, rerender) {
+      box.querySelectorAll('[data-x]').forEach((b) => b.addEventListener('click', () => {
+        const k = b.dataset.x, v = b.dataset.v;
+        if (k === 'mute') { if (typeof AUDIO !== 'undefined') { AUDIO.resume(); AUDIO.toggleMute(v === '1'); } }
+        if (k === 'tod') DAYNIGHT.set(v === 'cycle' ? 'cycle' : +v);
+        if (k === 'day') DAYNIGHT.setDayLength(+v);
+        if (k === 'wx') DAYNIGHT.weather(v);
+        if (k === 'mini') MINIMAP.setOn(v === '1');
+        rerender();
+      }));
+      box.querySelectorAll('[data-r]').forEach((r) => {
+        r.addEventListener('input', () => { r.style.setProperty('--v', r.value + '%'); if (typeof AUDIO !== 'undefined') { AUDIO.resume(); AUDIO.setVol(r.dataset.r, r.value / 100); } });
+        r.addEventListener('change', () => { if (typeof AUDIO !== 'undefined' && r.dataset.r === 'sfx') AUDIO.sfx('coin', {}); });
+        r.addEventListener('keydown', (e) => e.stopPropagation());
+      });
+    },
+  });
 })();
 
 /* ==== p85_tests.js ==== */
