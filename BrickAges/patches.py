@@ -55,4 +55,30 @@ PATCHES = [
     ('hud map base',
      "  return Hx;\n})();",
      "  Hx.mapBase = () => { if (!mapBase) mapBase = buildMapBase(); return mapBase; };\n  return Hx;\n})();"),
+
+    # ---- minifig models (Deluxe rework): the thigh rolls round the hip pin like the real leg (no box corners poking
+    #      through the hips mid-stride), hip-pin caps, smoother heads, hair, hats, arms and hands
+    ('fig leg',
+     "let g = GB(); g.box(-0.44, -0.72, -0.47, 0.44, 0.14, 0.42); g.box(-0.44, -1.14, -0.47, 0.44, -0.72, 0.60); GEO.leg = g.build();",
+     "let g = GB(); g.box(-0.44, -0.72, -0.47, 0.44, 0.0, 0.42); g.box(-0.44, -1.14, -0.47, 0.44, -0.72, 0.60);\n"
+     "    g.add(new THREE.CylinderGeometry(0.445, 0.445, 0.88, 14).rotateZ(Math.PI / 2), T(0, 0, -0.025), { k: 0 });   // the rounded thigh top, centred on the hip pin\n"
+     "    GEO.leg = g.build();"),
+    ('fig hips',
+     "g.box(-0.97, 1.18, -0.47, 0.97, 1.56, 0.47); g.box(-0.12, 1.02, -0.3, 0.12, 1.2, 0.3, { k: 0 }); GEO.hips = g.build();",
+     "g.box(-0.97, 1.18, -0.47, 0.97, 1.56, 0.47); g.box(-0.12, 1.02, -0.3, 0.12, 1.2, 0.3, { k: 0 });\n"
+     "    for (const sx of [-1, 1]) g.add(new THREE.CylinderGeometry(0.17, 0.17, 0.05, 10).rotateZ(Math.PI / 2), T(sx * 0.985, 1.3, -0.02), { k: 0 });   // hip-pin caps\n"
+     "    GEO.hips = g.build();"),
+    ('fig neck', "g.add(new THREE.CylinderGeometry(0.3, 0.3, 0.16, 12).translate(0, h + 0.07, 0), null, { k: 0 });",
+     "g.add(new THREE.CylinderGeometry(0.3, 0.3, 0.16, 14).translate(0, h + 0.07, 0), null, { k: 0 });"),
+    ('fig head', "const lg = new THREE.LatheGeometry(prof, 16, Math.PI, TAU);", "const lg = new THREE.LatheGeometry(prof, 24, Math.PI, TAU);"),
+    ('fig arm', "const tube = new THREE.TubeGeometry(armPath(sx), 10, 0.245, 8, false);", "const tube = new THREE.TubeGeometry(armPath(sx), 12, 0.245, 9, false);"),
+    ('fig hand', "const tor = new THREE.TorusGeometry(0.2, 0.09, 6, 12, TAU * 0.78);", "const tor = new THREE.TorusGeometry(0.2, 0.09, 7, 14, TAU * 0.78);"),
+    ('fig wrist', "g.add(new THREE.CylinderGeometry(0.12, 0.13, 0.26, 10), mul(T(0, 0.12, -0.26), RX(-0.7)), { k: 0 });", "g.add(new THREE.CylinderGeometry(0.12, 0.13, 0.26, 10), mul(T(0, 0.12, -0.26), RX(-0.7)), { k: 0 });"),
+    ('fig lathe', "    return new THREE.LatheGeometry(P2.map(([r, y]) => V2(r, y)), seg, a0, a1);",
+     "    return new THREE.LatheGeometry(P2.map(([r, y]) => V2(r, y)), seg >= 12 ? Math.round(seg * 1.2) : seg, a0, a1);   // (Deluxe: rounder hair and hats)"),
+
+    # ---- the controls legend knows the Deluxe keys
+    ('legend keys',
+     '<span class="g"><kbd>M</kbd>map</span><span class="g"><kbd>Esc</kbd>menu</span>',
+     '<span class="g"><kbd>M</kbd>map</span><span class="g"><kbd>J</kbd>jetpack</span><span class="g"><kbd>N</kbd>sound</span><span class="g"><kbd>Esc</kbd>menu</span>'),
 ]

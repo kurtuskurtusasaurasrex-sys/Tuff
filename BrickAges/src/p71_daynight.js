@@ -127,6 +127,16 @@ const DAYNIGHT = (() => {
         const k = 0.75 + R() * 0.5, tint = R(); cols.set(w.yellow ? [1.5 * k, 1.1 * k, 0.3 * k] : tint < 0.15 ? [0.55 * k, 0.75 * k, 1.2 * k] : [1.45 * k, 0.95 * k, 0.45 * k], i * 3); });
       geo.setAttribute('aCol', new THREE.InstancedBufferAttribute(cols, 3)); im.frustumCulled = false; im.renderOrder = 1; G.add(im); W.wins = im;
     }
+    // headlights: a beam of light on the road ahead of every car, buggy and crawler at night (updated each frame)
+    { const NH = 40, geo = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
+      const mat = new THREE.ShaderMaterial({ uniforms: { uK: U.uK }, blending: THREE.AdditiveBlending, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
+        vertexShader: `varying vec2 vUv; void main(){ vUv = uv; vec4 p = vec4(position, 1.0);
+          #ifdef USE_INSTANCING
+          p = instanceMatrix * p;
+          #endif
+          gl_Position = projectionMatrix * modelViewMatrix * p; }`,
+        fragmentShader: `uniform float uK; varying vec2 vUv; void main(){ float along = vUv.y; float w = 0.18 + 0.82 * along; float x = abs(vUv.x - 0.5) * 2.0 / w; float a = (1.0 - smoothstep(0.55, 1.0, x)) * smoothstep(0.0, 0.06, along) * pow(1.0 - along, 1.3); gl_FragColor = vec4(vec3(1.0, 0.85, 0.55) * a * 0.9 * uK, 1.0); }` });
+      W.heads = new THREE.InstancedMesh(geo, mat, NH); W.heads.count = 0; W.heads.frustumCulled = false; W.heads.renderOrder = 4; G.add(W.heads); }
     // fireflies (placed round the listener, re-seeded as you travel)
     const NF = 220; W.ff = { n: NF, cx: 1e9, cz: 1e9, base: new Float32Array(NF * 3), ph: new Float32Array(NF) };
     { const list = Array.from({ length: NF }, () => 0); W.fly = points(list, () => ({ p: [0, -500, 0], c: [0.75, 1.3, 0.25], s: 0.9 }), glowPts(0, { uK: (W.ffK = { value: 0 }), flicker: 'max(0.0, sin(uTime * (1.3 + aPh) + aPh * 40.0)) * 1.2', fall: '3.5' })); W.fly.geometry.attributes.position.setUsage(THREE.DynamicDrawUsage); G.add(W.fly); }
@@ -240,6 +250,23 @@ const DAYNIGHT = (() => {
     U.uK.value = Math.max(sst(4, -3, sel), cl * 0.5);   // lamps come on at dusk (and under a dark storm sky)
     winU.uK.value = sst(3, -5, sel);
     const cam = G.camera.position; U.uScale.value = GFX.H * 0.5 * G.camera.projectionMatrix.elements[5];
+    // headlights on everything that drives
+    if (W.heads) {
+      let n = 0;
+      if (U.uK.value > 0.01) {
+        const m4 = W._m4 || (W._m4 = new THREE.Matrix4()), q = W._q || (W._q = new THREE.Quaternion()), e = W._e || (W._e = new THREE.Euler()), v = W._v || (W._v = new THREE.Vector3()), sc = W._s || (W._s = new THREE.Vector3());
+        const lights = [];
+        if (typeof VEH !== 'undefined') for (const V of VEH.list) { if (!V.obj || !V.obj.visible || V.horses || !V.len) continue; lights.push([V.x, V.z, V.yaw, V.len, V.wid || 4, V.fixedY !== undefined ? V.fixedY : null]); }
+        const D0 = typeof GAME !== 'undefined' && GAME.mod('drive'); if (D0 && D0.S && D0.S.cur && D0.S.cur.kind === 'car') { const c = D0.S.cur; lights.push([c.x, c.z, c.yaw || 0, 10, 4, null]); }
+        for (const [x, z, yaw, len, wid] of lights) {
+          if (n >= W.heads.instanceMatrix.count) break; if (Math.hypot(x - cam.x, z - cam.z) > 220) continue;
+          const L = 13, fx = Math.sin(yaw), fz = Math.cos(yaw), cx = x + fx * (len / 2 + L / 2 - 0.5), cz = z + fz * (len / 2 + L / 2 - 0.5);
+          const g = WORLD.ground(cx, cz, WORLD.y(cx, cz) + 1.5);
+          e.set(0, yaw + Math.PI, 0); q.setFromEuler(e); m4.compose(v.set(cx, g + 0.05, cz), q, sc.set(Math.max(4, wid * 1.2), 1, L)); W.heads.setMatrixAt(n++, m4);
+        }
+      }
+      W.heads.count = n; W.heads.instanceMatrix.needsUpdate = n > 0;
+    }
     // fireflies: out on warm dry nights, on land, near the listener
     if (W.fly) {
       const want = night > 0.55 && Wt.rain < 0.2 && Wt.snow < 0.2 && cam.y < 120 ? 1 : 0; W.ffK.value += (want - W.ffK.value) * Math.min(1, dt * 0.5);

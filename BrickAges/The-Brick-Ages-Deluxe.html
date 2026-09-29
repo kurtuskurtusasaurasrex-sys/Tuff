@@ -55581,9 +55581,13 @@ const FIG = (() => {
   const GEO = {};
   function bodyParts() {
     // LEG — pivot at the hip pin; foot bottom at y = -1.14
-    let g = GB(); g.box(-0.44, -0.72, -0.47, 0.44, 0.14, 0.42); g.box(-0.44, -1.14, -0.47, 0.44, -0.72, 0.60); GEO.leg = g.build();
+    let g = GB(); g.box(-0.44, -0.72, -0.47, 0.44, 0.0, 0.42); g.box(-0.44, -1.14, -0.47, 0.44, -0.72, 0.60);
+    g.add(new THREE.CylinderGeometry(0.445, 0.445, 0.88, 14).rotateZ(Math.PI / 2), T(0, 0, -0.025), { k: 0 });   // the rounded thigh top, centred on the hip pin
+    GEO.leg = g.build();
     // HIPS
-    g = GB(); g.box(-0.97, 1.18, -0.47, 0.97, 1.56, 0.47); g.box(-0.12, 1.02, -0.3, 0.12, 1.2, 0.3, { k: 0 }); GEO.hips = g.build();
+    g = GB(); g.box(-0.97, 1.18, -0.47, 0.97, 1.56, 0.47); g.box(-0.12, 1.02, -0.3, 0.12, 1.2, 0.3, { k: 0 });
+    for (const sx of [-1, 1]) g.add(new THREE.CylinderGeometry(0.17, 0.17, 0.05, 10).rotateZ(Math.PI / 2), T(sx * 0.985, 1.3, -0.02), { k: 0 });   // hip-pin caps
+    GEO.hips = g.build();
     // TORSO — trapezoid, origin at its bottom centre; front print uv [0,1]^2, back [1,2]x[0,1]
     g = GB(); const bw = 0.975, tw = 0.74, h = 1.6, dz = 0.49;
     const FL = [-bw, 0, dz], FR = [bw, 0, dz], TR = [tw, h, dz], TLf = [-tw, h, dz], BL = [-bw, 0, -dz], BR2 = [bw, 0, -dz], BTR = [tw, h, -dz], BTL = [-tw, h, -dz];
@@ -55596,18 +55600,18 @@ const FIG = (() => {
     g.quad(TLf, TR, BTR, BTL, [0, 1, 0], { k: 16 });
     g.quad(FL, BL, BR2, FR, [0, -1, 0], { k: 0 });
     // neck post
-    g.add(new THREE.CylinderGeometry(0.3, 0.3, 0.16, 12).translate(0, h + 0.07, 0), null, { k: 0 });
+    g.add(new THREE.CylinderGeometry(0.3, 0.3, 0.16, 14).translate(0, h + 0.07, 0), null, { k: 0 });
     GEO.torso = g.build();
     // HEAD — lathe with the seam at the back; face print uv on the front half
     const prof = [[0.001, 0.0], [0.3, 0.0], [0.3, 0.12], [0.5, 0.13], [0.58, 0.18], [0.612, 0.27], [0.612, 0.97], [0.58, 1.05], [0.5, 1.1], [0.3, 1.1], [0.3, 1.29], [0.27, 1.32], [0.001, 1.32]].map(([r, y]) => V2(r, y));
-    const lg = new THREE.LatheGeometry(prof, 16, Math.PI, TAU);
+    const lg = new THREE.LatheGeometry(prof, 24, Math.PI, TAU);
     g = GB(); g.add(lg, null, { k: 0, uvFn: (v) => { let a = Math.atan2(v.x, v.z); return [0.5 + a / Math.PI, (v.y - 0.16) / 0.88]; } });
     GEO.head = g.build();
     // ARM (right arm, at -x side): tube down/out then forward; shoulder ball
     const armPath = (sx) => new THREE.CatmullRomCurve3([new THREE.Vector3(0, 0.05, 0), new THREE.Vector3(sx * 0.14, -0.45, 0.02), new THREE.Vector3(sx * 0.2, -0.86, 0.14), new THREE.Vector3(sx * 0.2, -1.0, 0.36)]);
     for (const [nm, sx] of [['armR', -1], ['armL', 1]]) {
       g = GB();
-      const tube = new THREE.TubeGeometry(armPath(sx), 10, 0.245, 8, false);
+      const tube = new THREE.TubeGeometry(armPath(sx), 12, 0.245, 9, false);
       g.add(tube, null, { k: 0 });
       g.add(new THREE.SphereGeometry(0.26, 10, 6), T(0, 0.05, 0), { k: 0 });
       g.add(new THREE.CircleGeometry(0.245, 10), mul(T(sx * 0.2, -1.0, 0.36), new THREE.Matrix4().lookAt(new THREE.Vector3(), new THREE.Vector3(0, -0.4, 1).normalize(), new THREE.Vector3(0, 1, 0))), { k: 0 });
@@ -55615,7 +55619,7 @@ const FIG = (() => {
     }
     // HAND — C clip around a vertical bar at the origin, opening toward +z, with a wrist stub going back/up
     g = GB();
-    const tor = new THREE.TorusGeometry(0.2, 0.09, 6, 12, TAU * 0.78); tor.rotateX(Math.PI / 2); tor.rotateY(Math.PI / 2 + TAU * 0.11);
+    const tor = new THREE.TorusGeometry(0.2, 0.09, 7, 14, TAU * 0.78); tor.rotateX(Math.PI / 2); tor.rotateY(Math.PI / 2 + TAU * 0.11);
     g.add(tor, null, { k: 0 });
     g.add(new THREE.CylinderGeometry(0.12, 0.13, 0.26, 10), mul(T(0, 0.12, -0.26), RX(-0.7)), { k: 0 });
     GEO.hand = g.build();
@@ -55628,7 +55632,7 @@ const FIG = (() => {
   function lathe(pts, seg = 20, a0 = 0, a1 = TAU) {
     let A = 0; for (let i = 0; i < pts.length; i++) { const p = pts[i], q = pts[(i + 1) % pts.length]; A += p[0] * q[1] - q[0] * p[1]; }
     const P2 = A < 0 ? pts.slice().reverse() : pts;
-    return new THREE.LatheGeometry(P2.map(([r, y]) => V2(r, y)), seg, a0, a1);
+    return new THREE.LatheGeometry(P2.map(([r, y]) => V2(r, y)), seg >= 12 ? Math.round(seg * 1.2) : seg, a0, a1);   // (Deluxe: rounder hair and hats)
   }
   function hats() {
     let g;
@@ -63491,7 +63495,7 @@ const HUD = (() => {
       <div id="gquest" class="card off"></div>
       <div id="gcomp" class="card"><div class="ctr"></div><div class="mk"><i></i><span></span></div></div>
       <div id="gway"><div class="ar"></div><div class="d"></div><div class="l"></div></div>
-      <div id="gkeys" class="card"><span class="h">CONTROLS</span><span class="g"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>move</span><span class="g"><kbd>Shift</kbd>run</span><span class="g"><kbd>Space</kbd>jump</span><span class="g"><kbd>E</kbd>interact</span><span class="g"><kbd>M</kbd>map</span><span class="g"><kbd>Esc</kbd>menu</span><span class="g"><kbd>?</kbd>show these</span></div>`;
+      <div id="gkeys" class="card"><span class="h">CONTROLS</span><span class="g"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>move</span><span class="g"><kbd>Shift</kbd>run</span><span class="g"><kbd>Space</kbd>jump</span><span class="g"><kbd>E</kbd>interact</span><span class="g"><kbd>M</kbd>map</span><span class="g"><kbd>J</kbd>jetpack</span><span class="g"><kbd>N</kbd>sound</span><span class="g"><kbd>Esc</kbd>menu</span><span class="g"><kbd>?</kbd>show these</span></div>`;
     ui.appendChild(root);
     const comp = root.querySelector('#gcomp');
     const ticks = [];
@@ -74484,6 +74488,16 @@ const DAYNIGHT = (() => {
         const k = 0.75 + R() * 0.5, tint = R(); cols.set(w.yellow ? [1.5 * k, 1.1 * k, 0.3 * k] : tint < 0.15 ? [0.55 * k, 0.75 * k, 1.2 * k] : [1.45 * k, 0.95 * k, 0.45 * k], i * 3); });
       geo.setAttribute('aCol', new THREE.InstancedBufferAttribute(cols, 3)); im.frustumCulled = false; im.renderOrder = 1; G.add(im); W.wins = im;
     }
+    // headlights: a beam of light on the road ahead of every car, buggy and crawler at night (updated each frame)
+    { const NH = 40, geo = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
+      const mat = new THREE.ShaderMaterial({ uniforms: { uK: U.uK }, blending: THREE.AdditiveBlending, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
+        vertexShader: `varying vec2 vUv; void main(){ vUv = uv; vec4 p = vec4(position, 1.0);
+          #ifdef USE_INSTANCING
+          p = instanceMatrix * p;
+          #endif
+          gl_Position = projectionMatrix * modelViewMatrix * p; }`,
+        fragmentShader: `uniform float uK; varying vec2 vUv; void main(){ float along = vUv.y; float w = 0.18 + 0.82 * along; float x = abs(vUv.x - 0.5) * 2.0 / w; float a = (1.0 - smoothstep(0.55, 1.0, x)) * smoothstep(0.0, 0.06, along) * pow(1.0 - along, 1.3); gl_FragColor = vec4(vec3(1.0, 0.85, 0.55) * a * 0.9 * uK, 1.0); }` });
+      W.heads = new THREE.InstancedMesh(geo, mat, NH); W.heads.count = 0; W.heads.frustumCulled = false; W.heads.renderOrder = 4; G.add(W.heads); }
     // fireflies (placed round the listener, re-seeded as you travel)
     const NF = 220; W.ff = { n: NF, cx: 1e9, cz: 1e9, base: new Float32Array(NF * 3), ph: new Float32Array(NF) };
     { const list = Array.from({ length: NF }, () => 0); W.fly = points(list, () => ({ p: [0, -500, 0], c: [0.75, 1.3, 0.25], s: 0.9 }), glowPts(0, { uK: (W.ffK = { value: 0 }), flicker: 'max(0.0, sin(uTime * (1.3 + aPh) + aPh * 40.0)) * 1.2', fall: '3.5' })); W.fly.geometry.attributes.position.setUsage(THREE.DynamicDrawUsage); G.add(W.fly); }
@@ -74597,6 +74611,23 @@ const DAYNIGHT = (() => {
     U.uK.value = Math.max(sst(4, -3, sel), cl * 0.5);   // lamps come on at dusk (and under a dark storm sky)
     winU.uK.value = sst(3, -5, sel);
     const cam = G.camera.position; U.uScale.value = GFX.H * 0.5 * G.camera.projectionMatrix.elements[5];
+    // headlights on everything that drives
+    if (W.heads) {
+      let n = 0;
+      if (U.uK.value > 0.01) {
+        const m4 = W._m4 || (W._m4 = new THREE.Matrix4()), q = W._q || (W._q = new THREE.Quaternion()), e = W._e || (W._e = new THREE.Euler()), v = W._v || (W._v = new THREE.Vector3()), sc = W._s || (W._s = new THREE.Vector3());
+        const lights = [];
+        if (typeof VEH !== 'undefined') for (const V of VEH.list) { if (!V.obj || !V.obj.visible || V.horses || !V.len) continue; lights.push([V.x, V.z, V.yaw, V.len, V.wid || 4, V.fixedY !== undefined ? V.fixedY : null]); }
+        const D0 = typeof GAME !== 'undefined' && GAME.mod('drive'); if (D0 && D0.S && D0.S.cur && D0.S.cur.kind === 'car') { const c = D0.S.cur; lights.push([c.x, c.z, c.yaw || 0, 10, 4, null]); }
+        for (const [x, z, yaw, len, wid] of lights) {
+          if (n >= W.heads.instanceMatrix.count) break; if (Math.hypot(x - cam.x, z - cam.z) > 220) continue;
+          const L = 13, fx = Math.sin(yaw), fz = Math.cos(yaw), cx = x + fx * (len / 2 + L / 2 - 0.5), cz = z + fz * (len / 2 + L / 2 - 0.5);
+          const g = WORLD.ground(cx, cz, WORLD.y(cx, cz) + 1.5);
+          e.set(0, yaw + Math.PI, 0); q.setFromEuler(e); m4.compose(v.set(cx, g + 0.05, cz), q, sc.set(Math.max(4, wid * 1.2), 1, L)); W.heads.setMatrixAt(n++, m4);
+        }
+      }
+      W.heads.count = n; W.heads.instanceMatrix.needsUpdate = n > 0;
+    }
     // fireflies: out on warm dry nights, on land, near the listener
     if (W.fly) {
       const want = night > 0.55 && Wt.rain < 0.2 && Wt.snow < 0.2 && cam.y < 120 ? 1 : 0; W.ffK.value += (want - W.ffK.value) * Math.min(1, dt * 0.5);
@@ -75264,6 +75295,40 @@ const MINIMAP = (() => {
     const z = typeof UI !== 'undefined' ? UI.S.zone : null, zn = z && ZN[z] ? ZN[z] : ''; if (S.zn.textContent !== zn) S.zn.textContent = zn;
   });
   return { S, setOn };
+})();
+
+/* ==== p78_whatsnew.js ==== */
+/* WHAT'S NEW — a card on the title screen listing what the Deluxe Edition adds, so nobody misses the jetpack. */
+(() => {
+  if (BA.flag('test')) return;
+  BA.build('deluxe title card', 99, () => {
+    const T = document.getElementById('mn-title'); if (!T) return;
+    const st = document.createElement('style'); st.textContent = `
+      #dlx-new{position:absolute;right:max(4vw,24px);top:50%;transform:translateY(-50%) rotate(1.5deg);width:min(340px,30vw);pointer-events:auto;background:#fffdf5;color:#1a1a1a;border:4px solid #1a1a1a;border-radius:14px;box-shadow:0 7px 0 #1a1a1a,0 20px 50px rgba(0,0,0,.45);overflow:hidden}
+      #dlx-new .hd{background:#d8262a;border-bottom:4px solid #1a1a1a;padding:10px 14px 8px}
+      #dlx-new .hd small{display:block;font:800 10px var(--ui);letter-spacing:.24em;color:#ffd21a}
+      #dlx-new .hd b{display:block;font:900 italic 24px/1 var(--chunky);color:#fff;text-shadow:2px 2px 0 #1a1a1a;letter-spacing:.02em}
+      #dlx-new ul{list-style:none;margin:0;padding:10px 14px 12px;display:flex;flex-direction:column;gap:7px}
+      #dlx-new li{display:flex;gap:10px;align-items:center;font:600 12.5px/1.25 var(--ui)}
+      #dlx-new li i{flex:none;width:28px;height:28px;border-radius:7px;border:2.5px solid #1a1a1a;background:#ffd21a;display:flex;align-items:center;justify-content:center;font-style:normal;font-size:15px}
+      #dlx-new li b{font-weight:900}
+      #dlx-new kbd{display:inline-block;font:900 10px var(--ui);background:#ffd21a;border:2px solid #1a1a1a;border-radius:4px;padding:0 4px;margin:0 1px}
+      @media (max-width:1100px),(max-height:560px){#dlx-new{display:none}}`;
+    document.head.appendChild(st);
+    const el = document.createElement('div'); el.id = 'dlx-new';
+    const items = [
+      ['&#127925;', '<b>Music &amp; sound</b> for every land — a band that plays along · <kbd>N</kbd> mutes'],
+      ['&#9728;', '<b>Day &amp; night</b> — sunsets, moonlit nights, lit windows, rain, storms, snow &amp; rainbows'],
+      ['&#128640;', '<b>Jetpack</b> on the stand by the fountain — jump, then hold <kbd>Space</kbd>'],
+      ['&#128054;', '<b>Bricksy the dog</b> — adopt her in the park; she sniffs out studs'],
+      ['&#127878;', '<b>Fireworks</b> over the harbour every night (and when you finish a quest)'],
+      ['&#127942;', '<b>33 trophies</b> — see them in the pause menu\'s Trophy Room'],
+      ['&#129517;', '<b>Minimap</b> in the corner — click it for the big map'],
+      ['&#129513;', '<b>Reworked minifigs</b> — rounder heads, hair &amp; hands, real hip joints'],
+    ];
+    el.innerHTML = `<div class="hd"><small>NEW IN THE</small><b>DELUXE EDITION</b></div><ul>${items.map(([i, t]) => `<li><i>${i}</i><span>${t}</span></li>`).join('')}</ul>`;
+    T.appendChild(el);
+  });
 })();
 
 /* ==== p79_settings.js ==== */
