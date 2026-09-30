@@ -5,6 +5,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { particleScale } from '../gfx/particles.js';
 
 const GradeShader = {
   uniforms: {
@@ -71,7 +72,7 @@ export class Engine {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.0;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -115,6 +116,7 @@ export class Engine {
     this.bloom.setSize(Math.floor(w / 2), Math.floor(h / 2));
     const pr = this.renderer.getPixelRatio();
     this.post.uRes.value.set(w * pr, h * pr);
+    particleScale.value = (h * pr) / 90;
     this.updateCamera(this.camera);
   }
 

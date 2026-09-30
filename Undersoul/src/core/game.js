@@ -99,10 +99,12 @@ class Game {
       });
       for (const w of ready) w.resolve();
     }
-    // top overlay gets input
+    // top overlay gets input; if any overlay was open at the start of the
+    // frame, the mode must not also react to this frame's key presses.
+    const busyBefore = this.busy;
     const top = this.overlays[this.overlays.length - 1];
     for (const o of [...this.overlays]) o.update(dt, o === top);
-    if (this.mode) this.mode.update(dt, this.busy);
+    if (this.mode) this.mode.update(dt, busyBefore || this.busy);
     this.flashAlpha = Math.max(0, this.flashAlpha - dt * 3);
     this.letterbox += (this.letterboxTarget - this.letterbox) * Math.min(1, dt * 6);
   }

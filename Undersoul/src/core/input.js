@@ -61,8 +61,6 @@ class Input {
     // Name-entry screens want raw characters.
     const top = this.textListeners[this.textListeners.length - 1];
     if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && /[A-Za-z0-9 !?.'-]/.test(e.key)) {
-      if (e.code === 'Space' && top.spaceIsConfirm) return false;
-      if (/[zxcZXC]/.test(e.key) && top.lettersOnlyWhenTyping && !top.typing()) return false;
       e.preventDefault();
       top.onChar(e.key);
       return true;
@@ -70,6 +68,11 @@ class Input {
     if (e.code === 'Backspace') {
       e.preventDefault();
       top.onBackspace();
+      return true;
+    }
+    if ((e.code === 'Enter' || e.code === 'NumpadEnter') && top.onEnter) {
+      e.preventDefault();
+      if (!e.repeat) top.onEnter();
       return true;
     }
     return false;

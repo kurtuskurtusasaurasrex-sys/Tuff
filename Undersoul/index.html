@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>UNDERSOUL</title>
+<meta name="description" content="A 3D bullet-hell RPG inspired by Undertale. Seven souls, skill trees, three routes.">
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; touch-action: none; }
+  #app { position: fixed; inset: 0; background: #000; }
+  #app canvas { position: absolute; inset: 0; display: block; }
+  #ui { pointer-events: none; image-rendering: pixelated; }
+  #touch { position: absolute; inset: 0; pointer-events: none; display: none; }
+  #touch.on { display: block; }
+  .tbtn { position: absolute; pointer-events: auto; width: 64px; height: 64px; border: 3px solid rgba(255,255,255,.55);
+    border-radius: 50%; background: rgba(0,0,0,.35); color: #fff; font: 700 20px monospace; display: flex;
+    align-items: center; justify-content: center; user-select: none; -webkit-user-select: none; }
+  .tbtn.on { background: rgba(255,255,255,.25); }
+  #dpad { position: absolute; left: calc(16px + env(safe-area-inset-left, 0px)); bottom: calc(16px + env(safe-area-inset-bottom, 0px)); width: 168px; height: 168px; pointer-events: auto; }
+  #dpad .tbtn { border-radius: 12px; width: 56px; height: 56px; }
+  #btns { position: absolute; right: calc(16px + env(safe-area-inset-right, 0px)); bottom: calc(24px + env(safe-area-inset-bottom, 0px)); width: 170px; height: 160px; }
+  #noscript { color: #fff; font: 16px monospace; padding: 24px; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="touch">
+  <div id="dpad">
+    <div class="tbtn" data-a="up" style="left:56px;top:0">&#9650;</div>
+    <div class="tbtn" data-a="left" style="left:0;top:56px">&#9664;</div>
+    <div class="tbtn" data-a="right" style="left:112px;top:56px">&#9654;</div>
+    <div class="tbtn" data-a="down" style="left:56px;top:112px">&#9660;</div>
+  </div>
+  <div id="btns">
+    <div class="tbtn" data-a="confirm" style="right:0;top:40px">Z</div>
+    <div class="tbtn" data-a="cancel" style="right:76px;top:80px">X</div>
+    <div class="tbtn" data-a="menu" style="right:84px;top:0;width:52px;height:52px;font-size:16px">C</div>
+  </div>
+</div>
+<noscript><div id="noscript">UNDERSOUL needs JavaScript and WebGL.</div></noscript>
+<script src="dist/undersoul.js"></script>
+</body>
+</html>
