@@ -1,0 +1,18 @@
+import * as esbuild from 'esbuild';
+import { chromium } from 'playwright';
+import fs from 'fs';
+import path from 'path';
+const here = path.dirname(new URL(import.meta.url).pathname);
+const out = path.join(here, '..', '.renders');
+await esbuild.build({ entryPoints: [path.join(here, 'render-entry.js')], bundle: true, format: 'iife', outfile: path.join(out, 'render.js'), logLevel: 'error' });
+const browser = await chromium.launch();
+const page = await browser.newPage();
+page.on('pageerror', (e) => console.log('[pageerror]', e.message));
+await page.goto('file://' + path.join(out, 'render.html'));
+const ins = process.argv[2].split(',');
+const midi = parseInt(process.argv[3] || '69');
+const list = ins.map((i) => [i, midi]);
+const b64 = await page.evaluate(([l]) => window.renderNotes(l, 1.5), [list]);
+fs.writeFileSync(path.join(out, 'notes.wav'), Buffer.from(b64, 'base64'));
+await browser.close();
+console.log(JSON.stringify(ins));
