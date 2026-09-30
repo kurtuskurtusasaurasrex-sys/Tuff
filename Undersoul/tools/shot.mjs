@@ -15,7 +15,7 @@ const errors = [];
 page.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') errors.push(`[${m.type()}] ${m.text()}`); });
 page.on('pageerror', (e) => errors.push('[pageerror] ' + e.message));
 if (process.env.PRE) await page.addInitScript(process.env.PRE);
-await page.goto('file://' + path.join(root, 'index.html'));
+await page.goto('file://' + path.join(root, 'index.html') + (process.env.HASH || ''));
 const KEYS = { z: 'KeyZ', x: 'KeyX', c: 'KeyC', up: 'ArrowUp', down: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight', enter: 'Enter', esc: 'Escape' };
 for (const cmd of script) {
   const [op, a, b] = cmd.split(/\s+/);
@@ -50,6 +50,21 @@ for (const cmd of script) {
       await page.waitForTimeout(100);
     }
     await page.waitForTimeout(parseInt(a || '200'));
+  }
+  else if (op === 'talk') {
+    // advance dialogue until none is open (or `a` presses), waiting for it to appear first
+    const t0 = Date.now();
+    while (Date.now() - t0 < 20000) {
+      const n = await page.evaluate(() => window.__game.overlays.length);
+      if (n) break;
+      await page.waitForTimeout(100);
+    }
+    for (let i = 0; i < parseInt(a || '30'); i++) {
+      const st = await page.evaluate(() => { const o = window.__game.overlays[window.__game.overlays.length - 1]; return o ? { done: o.typer ? o.typer.done : true, choosing: !!o.choosing } : null; });
+      if (!st) { await page.waitForTimeout(1800); const again = await page.evaluate(() => window.__game.overlays.length); if (!again) break; continue; }
+      if (!st.done) { await page.waitForTimeout(150); i--; continue; }
+      await page.keyboard.down('KeyZ'); await page.waitForTimeout(110); await page.keyboard.up('KeyZ'); await page.waitForTimeout(250);
+    }
   }
   else if (op === 'shot') { await page.screenshot({ path: path.join(out, a + '.png') }); console.log('shot', a); }
 }

@@ -17,6 +17,7 @@ import { CreatorMode, SoulSelectMode } from './modes/creator.js';
 import { maxHp } from './data/stats.js';
 import { startWorld } from './world/world.js';
 import { setupTouch } from './ui/touch.js';
+import { ModelGallery } from './modes/debug.js';
 
 class GateMode {
   id = 'gate';
@@ -55,9 +56,23 @@ class GateMode {
 }
 
 async function flow() {
+  if (location.hash === '#models') { await new ModelGallery().run(); return; }
   const gate = new GateMode();
   input.onFirstGesture.push(() => { gate.gestured = true; });
   await gate.run();
+  // Debug: index.html#room=h4&soul=justice&spawn=south&flags=a,b
+  if (location.hash.startsWith('#room=')) {
+    const q = new URLSearchParams(location.hash.slice(1));
+    newGame('KID', { skin: 2, hair: 0, hairColor: 1, eyes: 0, shirt: 0, stripe: 0, pants: 0, shoes: 0, accessory: 0 }, q.get('soul') || 'determination');
+    S.room = q.get('room');
+    S.spawn = q.get('spawn') || 'default';
+    for (const f of (q.get('flags') || '').split(',').filter(Boolean)) S.flags[f] = true;
+    if (q.get('lv')) S.lv = +q.get('lv');
+    if (q.get('skills')) S.skills = q.get('skills').split(',');
+    S.hp = maxHp();
+    S.items = ['ember_drop', 'frost_cone'];
+    await startWorld(q.get('spawn') ? false : true);
+  }
   const meta = getMeta();
   if (!meta.seenIntro) {
     await new IntroMode().run();

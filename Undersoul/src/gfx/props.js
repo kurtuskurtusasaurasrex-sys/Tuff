@@ -43,13 +43,13 @@ export function flowerBed(radius = 1.6, count = 70, colors = ['#ffd23a', '#ffe36
 }
 
 // Soft volumetric-looking shaft of light (additive cone with gradient).
-export function lightShaft(height = 10, radius = 1.4, color = '#fff4d0', opacity = 0.35) {
+export function lightShaft(height = 10, radius = 1.4, color = '#fff4d0', opacity = 0.35, layers = 3) {
   const g = new THREE.Group();
   const mat = new THREE.MeshBasicMaterial({
     map: tex.shaft(), color: new THREE.Color(color), transparent: true, opacity,
     blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, toneMapped: false,
   });
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < layers; i++) {
     const cone = new THREE.Mesh(new THREE.CylinderGeometry(radius * (0.55 + i * 0.12), radius * (0.9 + i * 0.2), height, 24, 1, true), mat);
     cone.position.y = height / 2;
     cone.rotation.y = i * 0.7;
