@@ -1,37 +1,55 @@
 // Turns keyboard / gamepad / touch into the 7-bit input word used by the sim.
 // The game has exactly four controls: MOVE (a stick or WASD/arrows), ATTACK, SPECIAL, GUARD (+direction = dodge).
+// Keys are rebindable (CONTROLS screen) and saved in localStorage.
 
 import { IN } from './config.js';
 
-const KEYS = {
-  solo: {   // online + vs CPU: both clusters work at once
-    L: ['ArrowLeft', 'KeyA'], R: ['ArrowRight', 'KeyD'], U: ['ArrowUp', 'KeyW'], D: ['ArrowDown', 'KeyS'],
-    ATK: ['KeyJ', 'KeyZ', 'Space'], SPC: ['KeyK', 'KeyX'], GRD: ['KeyL', 'KeyC', 'ShiftLeft', 'ShiftRight'],
-  },
+export const ACTIONS = ['L', 'R', 'U', 'D', 'ATK', 'SPC', 'GRD'];
+export const ACTION_LABEL = { L: 'LEFT', R: 'RIGHT', U: 'UP', D: 'DOWN', ATK: 'ATTACK', SPC: 'SPECIAL', GRD: 'GUARD / DODGE' };
+
+const DEFAULT_BINDS = {
   p1: { L: ['KeyA'], R: ['KeyD'], U: ['KeyW'], D: ['KeyS'], ATK: ['KeyF'], SPC: ['KeyG'], GRD: ['KeyH'] },
-  p2: { L: ['ArrowLeft'], R: ['ArrowRight'], U: ['ArrowUp'], D: ['ArrowDown'], ATK: ['KeyK'], SPC: ['KeyL'], GRD: ['Semicolon'] },
+  p2: { L: ['ArrowLeft'], R: ['ArrowRight'], U: ['ArrowUp'], D: ['ArrowDown'], ATK: ['Comma', 'Numpad1'], SPC: ['Period', 'Numpad2'], GRD: ['Slash', 'Numpad3'] },
 };
-export const KEY_HELP = {
-  solo: { move: 'WASD / Arrows', atk: 'J / Z / Space', spc: 'K / X', grd: 'L / C / Shift' },
-  p1: { move: 'WASD', atk: 'F', spc: 'G', grd: 'H' },
-  p2: { move: 'Arrows', atk: 'K', spc: 'L', grd: ';' },
-};
+// extra keys that only work when ONE person plays on the keyboard (so anybody can pick up and play)
+const SOLO_EXTRA = { ATK: ['KeyJ', 'KeyZ', 'Space'], SPC: ['KeyK', 'KeyX'], GRD: ['KeyL', 'KeyC', 'ShiftLeft', 'ShiftRight'] };
+
+const clone = (o) => JSON.parse(JSON.stringify(o));
+let binds = load();
+function load() {
+  try {
+    const v = JSON.parse(localStorage.getItem('tuff.keys'));
+    if (v && ['p1', 'p2'].every((p) => v[p] && ACTIONS.every((a) => Array.isArray(v[p][a])))) return v;
+  } catch (e) { /* first run / private mode */ }
+  return clone(DEFAULT_BINDS);
+}
+function persist() { try { localStorage.setItem('tuff.keys', JSON.stringify(binds)); } catch (e) { /* ignore */ } }
+
+export function keyName(c) {
+  const map = { Space: 'SPACE', ArrowLeft: '←', ArrowRight: '→', ArrowUp: '↑', ArrowDown: '↓', Comma: ',', Period: '.', Slash: '/', Semicolon: ';', Quote: "'", BracketLeft: '[', BracketRight: ']', Backslash: '\\', Minus: '-', Equal: '=', Backquote: '`', ShiftLeft: 'L-SHIFT', ShiftRight: 'R-SHIFT', ControlLeft: 'L-CTRL', ControlRight: 'R-CTRL', AltLeft: 'L-ALT', AltRight: 'R-ALT', Enter: 'ENTER', Tab: 'TAB', Backspace: 'BKSP' };
+  if (!c) return '-';
+  if (map[c]) return map[c];
+  if (c.startsWith('Key')) return c.slice(3);
+  if (c.startsWith('Digit')) return c.slice(5);
+  if (c.startsWith('Numpad')) return 'NUM ' + c.slice(6);
+  return c;
+}
 
 const down = new Set();
 const touch = { bits: 0 };
-let mode = 'solo';                     // 'solo' | 'local'
-const BLOCK = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Space']);
-
+const BLOCK = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Space', 'Tab', 'Slash', 'Quote']);
+const typing = (e) => e.target && /INPUT|TEXTAREA|SELECT/.test(e.target.tagName);
 addEventListener('keydown', (e) => {
   down.add(e.code);
-  if (BLOCK.has(e.code) && !(e.target && /INPUT|TEXTAREA|SELECT/.test(e.target.tagName))) e.preventDefault();
+  if (BLOCK.has(e.code) && !typing(e)) e.preventDefault();
 });
 addEventListener('keyup', (e) => down.delete(e.code));
 addEventListener('blur', () => { down.clear(); touch.bits = 0; });
 
-function fromKeys(map) {
+const anyDown = (codes) => codes.some((c) => down.has(c));
+function fromKeys(...maps) {
   let b = 0;
-  for (const [name, codes] of Object.entries(map)) if (codes.some((c) => down.has(c))) b |= IN[name];
+  for (const m of maps) for (const a of ACTIONS) if (m[a] && anyDown(m[a])) b |= IN[a];
   return b;
 }
 
@@ -52,26 +70,48 @@ function fromPad(pad) {
 const pads = () => (navigator.getGamepads ? Array.from(navigator.getGamepads()).filter(Boolean) : []);
 
 export const Input = {
-  setMode(m) { mode = m; },
-  get mode() { return mode; },
+  get binds() { return binds; },
+  defaults: DEFAULT_BINDS,
   touch,
-  // slot: 0/1 for local 2P, anything else = the single local player
-  bits(slot) {
-    if (mode === 'local') {
-      const p = pads();
-      return fromKeys(slot === 0 ? KEYS.p1 : KEYS.p2) | fromPad(p[slot]);
+  // `ord` = which local human (0..3); `humans` = how many people share this keyboard.
+  // One person: every key cluster works. Two: P1 and P2 use their own cluster. Pads always map by order.
+  bits(ord, humans) {
+    const p = pads();
+    if (humans <= 1) {
+      let b = fromKeys(binds.p1, binds.p2, SOLO_EXTRA) | touch.bits;
+      for (const g of p) b |= fromPad(g);
+      return b;
     }
-    let b = fromKeys(KEYS.solo) | touch.bits;
-    for (const p of pads()) b |= fromPad(p);
-    return b;
+    const keys = ord === 0 ? fromKeys(binds.p1) : ord === 1 ? fromKeys(binds.p2) : 0;
+    return keys | fromPad(p[ord]);
+  },
+  // menu navigation for keyboard owners: returns { who: 'p1'|'p2'|'solo', action } or null
+  menuAction(code) {
+    const find = (m) => { for (const a of ACTIONS) if (m[a].includes(code)) return a; return null; };
+    const map = { L: 'left', R: 'right', U: 'up', D: 'down', ATK: 'ok', SPC: 'back', GRD: 'back' };
+    const a1 = find(binds.p1), a2 = find(binds.p2);
+    if (a1) return { who: 'p1', action: map[a1] };
+    if (a2) return { who: 'p2', action: map[a2] };
+    for (const a of ['ATK', 'SPC', 'GRD']) if (SOLO_EXTRA[a].includes(code)) return { who: 'solo', action: map[a] };
+    return null;
   },
   anyPad() { return pads().length > 0; },
+  padCount() { return pads().length; },
   isDown: (code) => down.has(code),
+
+  // ---- rebinding ----
+  setBind(player, action, code) {
+    for (const pl of ['p1', 'p2']) for (const a of ACTIONS) binds[pl][a] = binds[pl][a].filter((c) => c !== code);   // one key, one job
+    binds[player][action] = [code];
+    persist();
+  },
+  resetBinds() { binds = clone(DEFAULT_BINDS); persist(); },
+  bindLabel(player, action) { return binds[player][action].map(keyName).join(' / ') || '-'; },
 };
 
-// ---- on-screen controls (touch devices) --------------------------------------------------------
+// ---- on-screen controls (touch devices): floating stick anywhere on the left half + three buttons ----------------------------
 export function setupTouch(root) {
-  const stick = root.querySelector('.tc-stick'), knob = root.querySelector('.tc-knob');
+  const stick = root.querySelector('.tc-stick'), knob = root.querySelector('.tc-knob'), zone = root.querySelector('.tc-zone');
   const btns = root.querySelectorAll('[data-bit]');
   let stickId = null, cx = 0, cy = 0;
   const R = 52;
@@ -79,30 +119,32 @@ export function setupTouch(root) {
   function setStick(x, y) {
     let dx = x - cx, dy = y - cy;
     const l = Math.hypot(dx, dy);
-    if (l > R) { dx = dx / l * R; dy = dy / l * R; }
+    if (l > R) { cx += (dx / l) * (l - R); cy += (dy / l) * (l - R); dx = (dx / l) * R; dy = (dy / l) * R; }     // base follows the thumb
+    stick.style.left = cx + 'px'; stick.style.top = cy + 'px';
     knob.style.transform = `translate(${dx}px, ${dy}px)`;
     let b = touch.bits & ~(IN.L | IN.R | IN.U | IN.D);
-    const t = 16;
+    const t = 14;
     if (dx < -t) b |= IN.L; else if (dx > t) b |= IN.R;
     if (dy < -t) b |= IN.U; else if (dy > t) b |= IN.D;
     touch.bits = b;
   }
-  stick.addEventListener('pointerdown', (e) => {
-    stickId = e.pointerId; stick.setPointerCapture(e.pointerId);
-    const r = stick.getBoundingClientRect(); cx = r.left + r.width / 2; cy = r.top + r.height / 2;
-    setStick(e.clientX, e.clientY); e.preventDefault();
+  zone.addEventListener('pointerdown', (e) => {
+    if (stickId !== null) return;
+    stickId = e.pointerId; zone.setPointerCapture(e.pointerId);
+    cx = e.clientX; cy = e.clientY;
+    stick.classList.add('live'); setStick(e.clientX, e.clientY); e.preventDefault();
   });
-  stick.addEventListener('pointermove', (e) => { if (e.pointerId === stickId) setStick(e.clientX, e.clientY); });
+  zone.addEventListener('pointermove', (e) => { if (e.pointerId === stickId) setStick(e.clientX, e.clientY); });
   const endStick = (e) => {
     if (e.pointerId !== stickId) return;
-    stickId = null; knob.style.transform = '';
+    stickId = null; stick.classList.remove('live'); knob.style.transform = '';
     touch.bits &= ~(IN.L | IN.R | IN.U | IN.D);
   };
-  stick.addEventListener('pointerup', endStick); stick.addEventListener('pointercancel', endStick);
+  zone.addEventListener('pointerup', endStick); zone.addEventListener('pointercancel', endStick);
 
   btns.forEach((el) => {
     const bit = IN[el.dataset.bit];
-    el.addEventListener('pointerdown', (e) => { el.setPointerCapture(e.pointerId); touch.bits |= bit; el.classList.add('on'); e.preventDefault(); });
+    el.addEventListener('pointerdown', (e) => { el.setPointerCapture(e.pointerId); touch.bits |= bit; el.classList.add('on'); if (navigator.vibrate) navigator.vibrate(8); e.preventDefault(); });
     const up = () => { touch.bits &= ~bit; el.classList.remove('on'); };
     el.addEventListener('pointerup', up); el.addEventListener('pointercancel', up); el.addEventListener('lostpointercapture', up);
   });

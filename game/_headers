@@ -1,0 +1,12 @@
+# Used by Netlify drag-and-drop deploys (the same rules live in ../netlify.toml for repo deploys).
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: no-referrer
+/*.html
+  Cache-Control: public, max-age=0, must-revalidate
+/js/*
+  Cache-Control: public, max-age=0, must-revalidate
+/css/*
+  Cache-Control: public, max-age=0, must-revalidate
+/assets/*
+  Cache-Control: public, max-age=86400

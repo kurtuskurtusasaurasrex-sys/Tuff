@@ -9,6 +9,7 @@ export default {
   tag: 'Teleporting zoner',
   blurb: 'Short, lazy and far too dangerous. Warps around the arena and calls down Gaster Blasters.',
   atlas: 'sans',
+  quote: 'heh. lazy bones, sharp moves. try to keep up, pal.',
   color: '#2f6fe0', superName: 'BAD TIME', cutPose: 'idle_eye2',
   stats: { power: 3, speed: 4, weight: 2, range: 5 },
   moveList: [

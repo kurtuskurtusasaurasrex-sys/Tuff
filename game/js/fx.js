@@ -13,15 +13,15 @@ export class Fx {
     this.shake = 0;
     this.flash = 0; this.flashColor = '#fff';
     this.banner = null;                 // {text, t, dur, color, size}
-    this.flashFighter = [0, 0];         // frames of white-flash left per fighter
-    this.trail = [[], []];
+    this.flashFighter = [0, 0, 0, 0];   // frames of white-flash left per fighter
+    this.trail = [[], [], [], []];
     this.koSlow = 0;
     this.quiet = false;
   }
 
   snd(name, o) { if (!this.quiet) Sound.play(name, o); }
 
-  reset() { this.list = []; this.shake = 0; this.flash = 0; this.banner = null; this.flashFighter = [0, 0]; this.trail = [[], []]; }
+  reset() { this.list = []; this.shake = 0; this.flash = 0; this.banner = null; this.flashFighter = [0, 0, 0, 0]; this.trail = [[], [], [], []]; }
 
   say(text, { dur = 70, color = '#fff', size = 48 } = {}) { this.banner = { text, t: 0, dur, color, size }; }
 
@@ -33,10 +33,15 @@ export class Fx {
         case 'time': this.say('TIME UP!', { dur: 100, size: 64, color: '#ffe066' }); break;
         case 'end': {
           const w = e.winner;
-          this.say(w < 0 ? 'DRAW' : CHARS[s.fighters[w].char].name + ' WINS!', { dur: 9999, size: 48, color: '#ffe066' });
+          this.say(w < 0 ? 'DRAW' : 'GAME!', { dur: 130, size: 72, color: '#ffe066' });
           this.snd('win');
           break;
         }
+        case 'ballspawn': this.ring(e.x, e.y, 60, '#ffffff', 26); this.say('SMASH BALL!', { dur: 60, size: 24, color: '#ffe066' }); this.snd('spawn'); break;
+        case 'ballhit': this.sparks(e.x, e.y, 2, 'zap', 0, 0); this.snd('parry', { vol: 0.8, rate: 1.4 }); break;
+        case 'ballbreak': this.ring(e.x, e.y, 120, '#ffe066', 30); this.sparks(e.x, e.y, 3, 'zap', 0, 0); this.shake = Math.max(this.shake, 9); this.flash = 6; this.flashColor = '#fff6c0'; this.say('SUPER READY!', { dur: 70, size: 32, color: '#ffe066' }); this.snd('super', { vol: 0.8, rate: 1.3 }); break;
+        case 'ballgone': this.poof(e.x, e.y); break;
+        case 'hazard': this.snd('stomp', { vol: 0.5, rate: 0.7 }); this.shake = Math.max(this.shake, 3); break;
         case 'swing': {
           const heavy = !/^jab/.test(e.mv);
           if (e.mv === 'spcDir' || e.mv === 'special' || e.mv === 'super') break;
@@ -121,7 +126,7 @@ export class Fx {
   update(s) {
     if (this.shake > 0) this.shake = Math.max(0, this.shake - 0.9);
     if (this.flash > 0) this.flash--;
-    for (let i = 0; i < 2; i++) if (this.flashFighter[i] > 0) this.flashFighter[i]--;
+    for (let i = 0; i < 4; i++) if (this.flashFighter[i] > 0) this.flashFighter[i]--;
     if (this.banner && ++this.banner.t > this.banner.dur) this.banner = null;
     for (const p of this.list) {
       p.t++;
@@ -129,7 +134,7 @@ export class Fx {
     }
     this.list = this.list.filter((p) => p.t < p.dur);
     if (s) {
-      for (let i = 0; i < 2; i++) {
+      for (let i = 0; i < s.fighters.length; i++) {
         const f = s.fighters[i], tr = this.trail[i];
         if (f.st === 'launch' || (f.st === 'dodge')) { tr.push({ x: f.x, y: f.y }); if (tr.length > 5) tr.shift(); }
         else if (tr.length) tr.shift();

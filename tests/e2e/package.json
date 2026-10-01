@@ -1,0 +1,12 @@
+{
+  "name": "tuff-e2e",
+  "private": true,
+  "description": "Browser tests for TUFF: local PeerJS broker + real WebRTC between several Chromium pages",
+  "scripts": {
+    "smoke": "node smoke.mjs",
+    "flows": "node flows.mjs",
+    "online": "node online.mjs",
+    "stages": "node stages.mjs"
+  },
+  "dependencies": { "peer": "^1.0.2", "playwright": "^1.50.0" }
+}

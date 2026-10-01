@@ -3,26 +3,32 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-fullscreen">
 <meta name="theme-color" content="#05060f">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="assets/icons/icon-192.png">
 <title>TUFF - Snow Brawl</title>
-<meta name="description" content="A free online platform-fighter / street-fighter mashup. Four controls, ring-outs, supers, rollback netplay. Sans vs Papyrus on Snowdin slab.">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%2305060f'/%3E%3Cpath d='M3 3h10v3H9v7H7V6H3z' fill='%23fff'/%3E%3C/svg%3E">
+<meta name="description" content="A free online brawler that mixes Smash and Street Fighter. 4 controls, up to 4 players, ring-outs, supers, rollback netplay. Sans vs Papyrus on a Snowdin slab.">
+<link rel="icon" type="image/png" href="assets/icons/icon-192.png">
 <link rel="preload" href="assets/fonts/PressStart2P.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
-<div id="rotate">ROTATE YOUR DEVICE<br><small>TUFF plays in landscape</small></div>
+<div id="rotate">&#9829;<br><br>* Turn your phone sideways.<br><br>* It fills you with DETERMINATION.</div>
 
-<!-- on-screen controls (touch devices only): outside #frame so they can sit in the letterbox margins -->
-  <div id="touch" hidden>
-    <div class="tc-stick"><div class="tc-knob"></div></div>
-    <div class="tc-btns">
-      <button class="tc-btn tc-atk" data-bit="ATK">ATK</button>
-      <button class="tc-btn tc-spc" data-bit="SPC">SPC</button>
-      <button class="tc-btn tc-grd" data-bit="GRD">GRD</button>
-    </div>
-    <button class="tc-pause" id="btn-touch-pause">II</button>
+<!-- on-screen controls (touch devices only): outside #frame so they can use the letterbox margins -->
+<div id="touch" hidden>
+  <div class="tc-zone"></div>
+  <div class="tc-stick"><div class="tc-knob"></div></div>
+  <div class="tc-btns">
+    <button class="tc-btn tc-atk" data-bit="ATK">ATTACK</button>
+    <button class="tc-btn tc-spc" data-bit="SPC">SPECIAL</button>
+    <button class="tc-btn tc-grd" data-bit="GRD">GUARD</button>
   </div>
+  <button class="tc-pause" id="btn-touch-pause">II</button>
+</div>
 
 <div id="frame">
   <canvas id="game" aria-label="Game"></canvas>
@@ -32,7 +38,7 @@
     <div class="center">
       <div class="logo small">TUFF</div>
       <div class="bar"><i id="load-bar"></i></div>
-      <p id="load-text" class="dim">LOADING…</p>
+      <p id="load-text" class="dim">LOADING...</p>
     </div>
   </section>
 
@@ -43,7 +49,7 @@
       <div class="sub">SNOW BRAWL</div>
       <p class="press blink" id="press-any">PRESS ANY KEY</p>
     </div>
-    <p class="foot">Fan project · Undertale &copy; Toby Fox · Not affiliated with or endorsed by the rights holders</p>
+    <p class="foot">Fan project &middot; Undertale &copy; Toby Fox &middot; Not affiliated with or endorsed by the rights holders</p>
   </section>
 
   <!-- ===== main menu ===== -->
@@ -51,70 +57,92 @@
     <div class="center">
       <div class="logo small">TUFF</div>
       <div class="box menu" data-menu>
-        <button data-go="online">ONLINE VERSUS</button>
-        <button data-go="local">LOCAL VERSUS</button>
-        <button data-go="cpu">VS CPU</button>
+        <button data-go="versus">VERSUS</button>
+        <button data-go="tourney">TOURNAMENT</button>
+        <button data-go="host">HOST ONLINE</button>
+        <button data-go="join">JOIN ONLINE</button>
+        <button data-go="controls">CONTROLS</button>
         <button data-go="howto">HOW TO PLAY</button>
         <button data-go="credits">CREDITS</button>
       </div>
+      <p class="dim" id="menu-hint">* The air is filled with the smell of snow.</p>
     </div>
     <div class="corner">
-      <button class="mini" id="btn-music">MUSIC: ON</button>
-      <button class="mini" id="btn-sfx">SFX: ON</button>
+      <button class="ut mini" id="btn-music">MUSIC: ON</button>
+      <button class="ut mini" id="btn-sfx">SFX: ON</button>
     </div>
   </section>
 
-  <!-- ===== online lobby ===== -->
-  <section id="s-online" class="screen" data-back="menu">
+  <!-- ===== join online ===== -->
+  <section id="s-join" class="screen" data-back="menu">
     <div class="center">
-      <h2>ONLINE VERSUS</h2>
-      <div class="box wide">
-        <div id="on-choose">
-          <div class="cols">
-            <div class="col">
-              <h3>HOST</h3>
-              <p class="dim">Get a room code and send it to a friend.</p>
-              <button class="big" id="btn-create">CREATE ROOM</button>
-            </div>
-            <div class="col">
-              <h3>JOIN</h3>
-              <p class="dim">Type the 5-letter room code.</p>
-              <input id="in-code" maxlength="7" placeholder="CODE" autocomplete="off" autocapitalize="characters" spellcheck="false">
-              <button class="big" id="btn-join">JOIN ROOM</button>
-            </div>
-          </div>
-        </div>
-        <div id="on-wait" hidden>
-          <p class="dim">ROOM CODE</p>
-          <div class="code" id="room-code">-----</div>
-          <div class="linkrow"><input id="room-link" readonly><button id="btn-copy" class="mini">COPY LINK</button></div>
-          <p class="dim blink" id="wait-note">Waiting for your opponent…</p>
-        </div>
-        <p id="on-status" class="status"></p>
+      <h2>JOIN ONLINE GAME</h2>
+      <div class="dialog">* Type the 5-character ROOM CODE your host sees.<br>* Then press ENTER.</div>
+      <input id="in-code" maxlength="7" placeholder="CODE" autocomplete="off" autocapitalize="characters" spellcheck="false" inputmode="text" enterkeyhint="go" aria-label="Room code">
+      <div class="row2">
+        <button class="ut" id="btn-join">CONNECT</button>
+        <button class="ut" id="btn-join-back">BACK</button>
       </div>
-      <button class="mini" id="btn-online-back">BACK</button>
-      <p class="foot2">Peer-to-peer · play with anyone, anywhere · lag is hidden by rollback netcode</p>
+      <p id="join-status" class="status"></p>
+      <p class="foot2">Online uses a free matchmaking service to connect you, then plays peer-to-peer. Up to 4 players.</p>
     </div>
   </section>
 
-  <!-- ===== character select ===== -->
+  <!-- ===== lobby / character select ===== -->
   <section id="s-select" class="screen" data-back="">
-    <div class="sel-top">
+    <div class="sel-head">
       <div id="sel-title">CHOOSE YOUR FIGHTER</div>
-      <div id="sel-stage" class="dim">STAGE: SNOWDIN TOWN</div>
+      <div id="sel-room" class="room" hidden>
+        <span>ROOM CODE <b id="room-code">-----</b></span>
+        <span id="room-count" class="dim"></span>
+        <button class="ut mini" id="btn-copy">COPY LINK</button>
+      </div>
+    </div>
+    <div class="settings" id="sel-settings">
+      <button class="ut mini" id="set-mode">VERSUS</button>
+      <button class="ut mini" id="set-size" hidden>BRACKET: 4</button>
+      <button class="ut mini" id="set-stage">SNOWDIN TOWN</button>
+      <div class="stepper"><span>STOCKS</span><button class="ut mini sq" id="stocks-dn">&#9664;</button><b id="stocks-val">3</b><button class="ut mini sq" id="stocks-up">&#9654;</button></div>
+      <div class="stepper"><span>TIME</span><button class="ut mini sq" id="time-dn">&#9664;</button><b id="time-val">120</b><button class="ut mini sq" id="time-up">&#9654;</button></div>
+      <button class="ut mini" id="set-cpu">CPU: NORMAL</button>
+      <button class="ut mini" id="btn-sel-back">BACK</button>
     </div>
     <div class="sel-main">
       <div class="grid" id="sel-grid"></div>
       <div class="info box" id="sel-info"></div>
     </div>
-    <div class="sel-bottom">
-      <div id="sel-p1" class="pbadge p1"></div>
+    <div class="slots" id="sel-slots"></div>
+    <div class="sel-foot">
       <div id="sel-hint" class="dim"></div>
-      <div id="sel-p2" class="pbadge p2"></div>
+      <button class="ut fight" id="btn-fight" hidden>FIGHT!</button>
     </div>
-    <div class="sel-actions">
-      <div id="cpu-opts" hidden>CPU LEVEL <button class="mini" id="btn-level">NORMAL</button></div>
-      <button class="mini" id="btn-sel-back">BACK</button>
+  </section>
+
+  <!-- ===== tournament bracket ===== -->
+  <section id="s-bracket" class="screen" data-back="">
+    <h2 id="br-title">TOURNAMENT</h2>
+    <div class="bracket" id="br-tree"></div>
+    <div class="dialog" id="br-dialog"></div>
+    <div class="row2">
+      <button class="ut" id="br-play">PLAY MATCH</button>
+      <button class="ut" id="br-skip" hidden>SKIP (CPU MATCH)</button>
+      <button class="ut" id="br-quit">QUIT</button>
+    </div>
+  </section>
+
+  <!-- ===== controls ===== -->
+  <section id="s-controls" class="screen" data-back="menu">
+    <div class="center">
+      <h2>CONTROLS</h2>
+      <div class="box wide ctrl">
+        <div class="ctrl-grid" id="ctrl-grid"></div>
+        <p class="dim" id="ctrl-note">Click a box, then press the key you want.</p>
+      </div>
+      <div class="row2">
+        <button class="ut mini" id="ctrl-reset">RESET TO DEFAULTS</button>
+        <button class="ut mini" id="ctrl-back">BACK</button>
+      </div>
+      <p class="foot2">One player on the keyboard can use <b>any</b> of these plus J/Z/Space, K/X, L/C/Shift. Gamepad: stick or D-pad, A/X attack, B/Y special, bumpers guard.</p>
     </div>
   </section>
 
@@ -123,21 +151,22 @@
     <div class="center">
       <h2>HOW TO PLAY</h2>
       <div class="box wide howto">
-        <p class="lead">Only <b>4 controls</b>. Knock your rival off the slab - the more damage they have, the farther they fly.</p>
+        <p class="lead">Only <b>4 controls</b>. Knock everyone off the slab - the more damage a fighter has, the farther they fly.</p>
         <table>
           <tr><th>MOVE</th><td>WASD / Arrows - walk in <b>every</b> direction, including up and down the arena</td></tr>
-          <tr><th>ATTACK</th><td>J / Z / Space - tap for a 3-hit combo. <b>Hold a direction + Attack</b> for a heavy strike</td></tr>
-          <tr><th>SPECIAL</th><td>K / X - ranged move. <b>Direction + Special</b> = movement special. <b>Meter full</b> = SUPER</td></tr>
-          <tr><th>GUARD</th><td>L / C / Shift - hold to block (tap just before a hit = <b>perfect guard</b>). <b>Direction + Guard</b> = dodge roll</td></tr>
+          <tr><th>ATTACK</th><td>tap for a 3-hit combo. <b>Hold a direction + Attack</b> for a heavy strike</td></tr>
+          <tr><th>SPECIAL</th><td>ranged move. <b>Direction + Special</b> = movement special. <b>Meter full</b> = SUPER</td></tr>
+          <tr><th>GUARD</th><td>hold to block (tap just before a hit = <b>perfect guard</b>). <b>Direction + Guard</b> = dodge roll</td></tr>
         </table>
         <ul>
-          <li><b>DAMAGE %</b> raises knockback. Land hits, then send them over the edge - walls don't exist, the slab does.</li>
-          <li><b>METER</b> fills as you fight. At <b>50%</b> hit Guard while stunned to <b>BREAK</b> out and fly back to the middle. At <b>100%</b> unleash your SUPER.</li>
-          <li>Each fighter has <b>3 stocks</b>. Last one standing, or lowest damage when time runs out, wins.</li>
-          <li>Local 2-player: P1 = WASD + F/G/H, P2 = Arrows + K/L/; &nbsp;·&nbsp; Gamepads work too. Touch screens get on-screen buttons.</li>
+          <li><b>DAMAGE %</b> raises knockback. Walls don't exist - the edge of the slab does.</li>
+          <li><b>METER</b> fills as you fight. At <b>50%</b> press Guard while stunned to <b>BREAK</b> out. At <b>100%</b> unleash your SUPER.</li>
+          <li>Pop the floating <b>SMASH BALL</b> with attacks to fill your meter instantly.</li>
+          <li>3 stocks each (change it in the lobby). Last one standing wins, or the lowest damage when time runs out.</li>
+          <li>Up to 4 players: friends online, friends on gamepads, or CPUs. Touch screens get an on-screen stick and buttons.</li>
         </ul>
       </div>
-      <button class="mini" data-go="menu">BACK</button>
+      <button class="ut mini" data-go="menu">BACK</button>
     </div>
   </section>
 
@@ -149,11 +178,11 @@
         <p><b>Sans</b> sprite sheet - edited by <b>Kepabra</b>, original sheet by <b>Underfail</b></p>
         <p><b>Papyrus</b> sprite sheet - <b>Sami32e</b></p>
         <p><b>Undertale</b> &copy; Toby Fox, Temmie Chang and company</p>
-        <p>Music: <b>Super Smash Bros. Melee</b> "Character Select" (bit-crushed) · <b>Ruder Monsters</b> from the DELTARUNE-style OST</p>
-        <p>Font: Press Start 2P (OFL) · Netcode: PeerJS · Everything else: made for fun</p>
+        <p>Music: <b>Super Smash Bros. Melee</b> "Character Select" (bit-crushed) &middot; <b>Ruder Monsters</b> from the DELTARUNE-style OST</p>
+        <p>Font: Press Start 2P (OFL) &middot; Netcode: PeerJS &middot; Everything else: made for fun</p>
         <p class="dim">This is a non-commercial fan project. If used, give credit. Do not claim the sprites as your own.</p>
       </div>
-      <button class="mini" data-go="menu">BACK</button>
+      <button class="ut mini" data-go="menu">BACK</button>
     </div>
   </section>
 
@@ -166,7 +195,7 @@
         <button data-act="restart" id="pause-restart">RESTART</button>
         <button data-act="quit">QUIT TO MENU</button>
       </div>
-      <p class="dim" id="pause-note"></p>
+      <div class="dialog small" id="pause-controls"></div>
     </div>
   </section>
 
@@ -175,17 +204,16 @@
     <div class="center">
       <h2 id="res-title">SANS WINS!</h2>
       <div class="box wide" id="res-stats"></div>
+      <div class="dialog small" id="res-dialog"></div>
       <div class="box menu" data-menu>
         <button data-act="rematch" id="res-rematch">REMATCH</button>
-        <button data-act="select">CHARACTER SELECT</button>
-        <button data-act="quit">MAIN MENU</button>
+        <button data-act="select" id="res-select">CHARACTER SELECT</button>
+        <button data-act="quit" id="res-quit">MAIN MENU</button>
       </div>
-      <p class="dim" id="res-note"></p>
     </div>
   </section>
 
   <div id="toast" role="status"></div>
-  <div id="hud-net" hidden></div>
 </div>
 
 <script src="vendor/peerjs.min.js"></script>

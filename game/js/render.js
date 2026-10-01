@@ -3,6 +3,9 @@
 
 import { W, H, ASPECT, STAGE, ARENA, RULES, toScreenY } from './config.js';
 import { CHARS } from './chars/index.js';
+import { STAGES, STAGE_ORDER } from './stages.js';
+
+export const SLOT_COL = ['#ff5a5a', '#5ab0ff', '#5aff8a', '#ffd84d'];
 
 const FONT = '"Press Start 2P", monospace';
 
@@ -18,11 +21,12 @@ function silhouette(img) {
 
 export async function loadAssets(onProgress) {
   const names = ['sans', 'papyrus', 'fx'];
-  const A = { atlas: {}, stage: null };
+  const A = { atlas: {}, stages: {} };
   let done = 0;
-  const tick = () => { done++; if (onProgress) onProgress(done / (names.length + 1)); };
+  const total = names.length + STAGE_ORDER.length;
+  const tick = () => { done++; if (onProgress) onProgress(done / total); };
   await Promise.all([
-    loadImg('assets/stage/snowdin.webp').then((i) => { A.stage = i; tick(); }),
+    ...STAGE_ORDER.map((id) => loadImg(STAGES[id].bg).then((i) => { A.stages[id] = i; tick(); })),
     ...names.map(async (n) => {
       const [img, meta] = await Promise.all([loadImg(`assets/sprites/${n}.png`), fetch(`assets/sprites/${n}.json`).then((r) => r.json())]);
       A.atlas[n] = { img, white: silhouette(img), frames: meta.frames, scale: meta.scale };
@@ -80,8 +84,11 @@ export class Renderer {
   constructor(canvas, assets) {
     this.canvas = canvas; this.ctx = canvas.getContext('2d'); this.A = assets;
     canvas.width = W; canvas.height = H;
+    this.slotOf = null;                       // fighter index -> lobby slot (for stable player colours)
     this.ctx.imageSmoothingEnabled = false;
   }
+
+  col(i) { return SLOT_COL[(this.slotOf && this.slotOf[i] !== undefined ? this.slotOf[i] : i) % 4]; }
 
   sprite(ctx, atlasName, name, x, y, { flip = false, alpha = 1, scale = 1, white = 0 } = {}) {
     const at = this.A.atlas[atlasName], m = at.frames[name];
@@ -103,8 +110,17 @@ export class Renderer {
     const ctx = this.ctx;
     ctx.save();
     ctx.imageSmoothingEnabled = false;
+    // the last KO of a match: punch in toward where it happened
+    if (s.phase === 'over' && s.phaseT < 130 && s.reason === 'ko') {
+      const k = Math.min(1, s.phaseT / 26), out = s.phaseT > 100 ? 1 - (s.phaseT - 100) / 30 : 1;
+      const z = 1 + 0.55 * k * out;
+      const fxp = Math.max(0, Math.min(W, s.koX)), fyp = Math.max(0, Math.min(H, toScreenY(s.koY)));
+      const hw = W / 2 / z, hh = H / 2 / z;
+      const tx = Math.max(hw, Math.min(W - hw, W / 2 + (fxp - W / 2) * 0.8)), ty = Math.max(hh, Math.min(H - hh, H / 2 + (fyp - H / 2) * 0.8));
+      ctx.translate(W / 2, H / 2); ctx.scale(z, z); ctx.translate(-tx, -ty);
+    }
     if (fx && fx.shake > 0.3) ctx.translate(Math.round((Math.random() - 0.5) * fx.shake * 2), Math.round((Math.random() - 0.5) * fx.shake * 2));
-    ctx.drawImage(this.A.stage, 0, 0, W, H);
+    ctx.drawImage(this.A.stages[s.stage] || this.A.stages.snowdin, 0, 0, W, H);
 
     this.drawTelegraphs(ctx, s);
     this.drawEntities(ctx, s, fx, o);
@@ -114,6 +130,7 @@ export class Renderer {
 
     if (fx && fx.flash > 0) { ctx.globalAlpha = Math.min(0.85, fx.flash / 8); ctx.fillStyle = fx.flashColor; ctx.fillRect(0, 0, W, H); ctx.globalAlpha = 1; }
     if (o.hud !== false) {
+      this.drawOffscreen(ctx, s);
       this.drawHud(ctx, s, fx, o);
       if (s.cut && s.hitstop > 0) this.drawCutIn(ctx, s);
       if (fx && fx.banner && !(s.cut && s.hitstop > 0)) this.drawBanner(ctx, fx.banner);
@@ -149,6 +166,7 @@ export class Renderer {
       ctx.beginPath(); ctx.ellipse(sx(f.x), sy(f.y) + 2, rx, rx * 0.42, 0, 0, Math.PI * 2); ctx.fill();
     }
     for (const f of s.fighters) list.push({ y: f.y, f: true, ref: f });
+    if (s.ball) list.push({ y: s.ball.y, ref: s.ball, kind: 'ball' });
     for (const p of s.projs) {
       if (p.k === 'beam') list.push({ y: p.y, ref: p, kind: 'blaster' });
       else if (p.k === 'burst') list.push({ y: p.y, ref: p, kind: 'burst' });
@@ -157,6 +175,7 @@ export class Renderer {
     list.sort((a, b) => a.y - b.y);
     for (const it of list) {
       if (it.f) this.drawFighter(ctx, s, it.ref, fx, o);
+      else if (it.kind === 'ball') this.drawBall(ctx, it.ref, s);
       else if (it.kind === 'blaster') this.drawBlaster(ctx, it.ref);
       else if (it.kind === 'burst') this.drawBurst(ctx, it.ref);
       else this.drawOrb(ctx, it.ref, s);
@@ -206,7 +225,7 @@ export class Renderer {
     // tag above the head
     if (o.labels && f.st !== 'fall' && f.st !== 'spawn') {
       const h = this.frameHeight(C.atlas, pose.n) + 16;
-      const col = f.i === 0 ? '#ff5a5a' : '#5ab0ff';
+      const col = this.col(f.i);
       ctx.fillStyle = col; ctx.strokeStyle = '#000'; ctx.lineWidth = 3;
       const tx = Math.round(sx(f.x)), ty = Math.round(sy(f.y) - h);
       ctx.beginPath(); ctx.moveTo(tx - 7, ty - 8); ctx.lineTo(tx + 7, ty - 8); ctx.lineTo(tx, ty); ctx.closePath(); ctx.stroke(); ctx.fill();
@@ -287,71 +306,108 @@ export class Renderer {
 
   // ---- HUD ------------------------------------------------------------------------------------
   drawHud(ctx, s, fx, o) {
-    // top gradient so text reads against the sky
-    const g = ctx.createLinearGradient(0, 0, 0, 90); g.addColorStop(0, 'rgba(0,0,12,0.65)'); g.addColorStop(1, 'rgba(0,0,12,0)');
-    ctx.fillStyle = g; ctx.fillRect(0, 0, W, 90);
+    const g = ctx.createLinearGradient(0, 0, 0, 100); g.addColorStop(0, 'rgba(0,0,12,0.7)'); g.addColorStop(1, 'rgba(0,0,12,0)');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, 100);
+    s.fighters.forEach((f) => this.drawPlayerHud(ctx, s, f, fx, o));
 
-    for (const f of s.fighters) this.drawPlayerHud(ctx, s, f, fx, o);
-
-    // timer
     const secs = Math.ceil(s.timer / 60);
-    ctx.fillStyle = 'rgba(0,0,16,0.75)'; ctx.fillRect(W / 2 - 46, 10, 92, 52);
-    ctx.strokeStyle = '#fff'; ctx.lineWidth = 3; ctx.strokeRect(W / 2 - 46, 10, 92, 52);
-    text(ctx, String(secs).padStart(2, '0'), W / 2, 50, 32, secs <= 10 ? '#ff6a6a' : '#fff', 'center');
-
+    ctx.fillStyle = 'rgba(0,0,16,0.8)'; ctx.fillRect(W / 2 - 54, 8, 108, 52);
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 3; ctx.strokeRect(W / 2 - 54, 8, 108, 52);
+    text(ctx, String(secs).padStart(2, '0'), W / 2, 47, secs >= 100 ? 28 : 32, secs <= 10 ? '#ff6a6a' : '#fff', 'center');
     if (o.netInfo) text(ctx, o.netInfo, W / 2, 80, 8, o.netBad ? '#ff9a9a' : '#9fe8ff', 'center');
   }
 
+  panelRect(i, n) {
+    const pw = 214, gap = 6;
+    const left = n === 2 ? [0] : n === 3 ? [0, 1] : [0, 1];
+    const x = left.includes(i) ? 8 + left.indexOf(i) * (pw + gap) : W - 8 - pw - (n - 1 - i) * (pw + gap);
+    return { x, y: 6, w: pw, h: 74 };
+  }
+
+  heart(ctx, x, y, sc, col) {                                  // the SOUL
+    const rows = ['.##.##.', '#######', '#######', '.#####.', '..###..', '...#...'];
+    ctx.fillStyle = col;
+    rows.forEach((row, ry) => { for (let rx = 0; rx < 7; rx++) if (row[rx] === '#') ctx.fillRect(Math.round(x + rx * sc), Math.round(y + ry * sc), sc, sc); });
+  }
+
   drawPlayerHud(ctx, s, f, fx, o) {
-    const C = CHARS[f.char], left = f.i === 0;
+    const C = CHARS[f.char], col = this.col(f.i);
     const at = this.A.atlas[C.atlas], ic = at.frames.icon;
-    const x0 = left ? 18 : W - 18;
-    const dir = left ? 1 : -1;
-    const col = left ? '#ff5a5a' : '#5ab0ff';
-
-    // ---- top: portrait, name, super meter
-    ctx.fillStyle = 'rgba(0,0,16,0.75)'; ctx.fillRect(left ? x0 : x0 - 64, 8, 64, 56);
-    ctx.strokeStyle = col; ctx.lineWidth = 3; ctx.strokeRect(left ? x0 : x0 - 64, 8, 64, 56);
-    const ih = ic.h * at.scale, iw = ic.w * at.scale, isc = Math.min(1, 48 / Math.max(ih, iw));
-    ctx.drawImage(at.img, ic.x, ic.y, ic.w, ic.h, Math.round((left ? x0 + 32 : x0 - 32) - iw * isc / 2), Math.round(36 - ih * isc / 2), Math.round(iw * isc), Math.round(ih * isc));
-    const nx = left ? x0 + 74 : x0 - 74;
-    text(ctx, (o.names && o.names[f.i]) || C.name, nx, 28, 12, '#fff', left ? 'left' : 'right');
-    // meter
-    const mw = 230, my = 38, mx = left ? nx : nx - mw;
-    ctx.fillStyle = 'rgba(0,0,16,0.8)'; ctx.fillRect(mx - 2, my - 2, mw + 4, 18);
-    const full = f.meter >= 100;
-    const fill = Math.round(mw * Math.min(100, f.meter) / 100);
-    const mg = ctx.createLinearGradient(0, my, 0, my + 14);
-    if (full) { const pulse = (s.frame >> 2) & 1; mg.addColorStop(0, pulse ? '#fff6b0' : '#ffe066'); mg.addColorStop(1, pulse ? '#ffb020' : '#ff9a00'); }
-    else { mg.addColorStop(0, f.meter >= 50 ? '#6fe0ff' : '#4a90e0'); mg.addColorStop(1, f.meter >= 50 ? '#2a8ed0' : '#2a5db0'); }
-    ctx.fillStyle = mg;
-    if (left) ctx.fillRect(mx, my, fill, 14); else ctx.fillRect(mx + mw - fill, my, fill, 14);
-    ctx.fillStyle = 'rgba(255,255,255,0.35)';
-    for (const q of [0.25, 0.5, 0.75]) ctx.fillRect(Math.round(mx + mw * (left ? q : 1 - q)), my, q === 0.5 ? 3 : 1, 14);
-    ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.strokeRect(mx - 2, my - 2, mw + 4, 18);
-    text(ctx, full ? 'SUPER READY!' : f.meter >= 50 ? 'BREAK OK' : 'SUPER', left ? mx : mx + mw, my + 34, 8, full ? '#ffe066' : '#bcd4ff', left ? 'left' : 'right');
-
-    // ---- bottom: damage % + stocks
+    const P = this.panelRect(f.i, s.n), out = f.stocks <= 0 && f.st === 'dead';
+    ctx.fillStyle = 'rgba(0,0,16,0.82)'; ctx.fillRect(P.x, P.y, P.w, P.h);
+    ctx.strokeStyle = out ? '#555' : col; ctx.lineWidth = 3; ctx.strokeRect(P.x + 1.5, P.y + 1.5, P.w - 3, P.h - 3);
+    // portrait
+    ctx.fillStyle = '#000'; ctx.fillRect(P.x + 6, P.y + 6, 50, 50);
+    const iw = ic.w * at.scale, ih = ic.h * at.scale, isc = Math.min(1, 42 / Math.max(iw, ih));
+    ctx.globalAlpha = out ? 0.35 : 1;
+    ctx.drawImage(at.img, ic.x, ic.y, ic.w, ic.h, Math.round(P.x + 31 - iw * isc / 2), Math.round(P.y + 31 - ih * isc / 2), Math.round(iw * isc), Math.round(ih * isc));
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.strokeRect(P.x + 6, P.y + 6, 50, 50);
+    // label + name
+    const label = (o.labels && o.labels[f.i]) || 'P' + (f.i + 1);
+    text(ctx, label, P.x + 64, P.y + 22, 10, col, 'left', null);
+    text(ctx, C.name, P.x + 64 + (label.length + 1) * 10, P.y + 22, 10, '#fff', 'left', null);
+    if (out) { text(ctx, 'OUT', P.x + 64, P.y + 54, 24, '#777', 'left', null); return; }
+    // damage
     const pct = Math.floor(f.dmg);
     const pc = pct < 50 ? '#ffffff' : pct < 100 ? '#ffe066' : pct < 150 ? '#ff9a3c' : '#ff4a4a';
-    const bx = left ? 26 : W - 26;
     const shake = fx && fx.flashFighter[f.i] > 0 ? ((s.frame & 1) ? 2 : -2) : 0;
-    const label = pct + '%';
-    text(ctx, label, bx + shake, 652, 32, pc, left ? 'left' : 'right');
-    ctx.font = `32px ${FONT}`;
-    const tw = ctx.measureText(label).width;
-    const w = ic.w * at.scale, h = ic.h * at.scale, sc = Math.min(1, 26 / Math.max(w, h));
-    for (let k = 0; k < 3; k++) {
-      ctx.globalAlpha = k < f.stocks ? 1 : 0.2;
-      const px = left ? bx + tw + 22 + k * 32 : bx - tw - 22 - k * 32 - w * sc;
-      ctx.drawImage(at.img, ic.x, ic.y, ic.w, ic.h, Math.round(px), 630, Math.round(w * sc), Math.round(h * sc));
-    }
-    ctx.globalAlpha = 1;
-    // combo counter near the attacker's meter
+    text(ctx, pct + '%', P.x + 64 + shake, P.y + 52, 26, pc, 'left', '#000');
+    // stocks = souls, stacked in a column on the right edge
+    const hx = P.x + P.w - 24;
+    if (f.stocks <= 3) for (let k = 0; k < f.stocks; k++) this.heart(ctx, hx, P.y + 8 + k * 17, 2, col);
+    else { this.heart(ctx, hx, P.y + 10, 2, col); text(ctx, 'x' + f.stocks, hx - 2, P.y + 44, 10, '#fff', 'left', null); }
+    // super meter
+    const mw = P.w - 64 - 30, mx = P.x + 64, my = P.y + 60, full = f.meter >= 100;
+    ctx.fillStyle = '#000'; ctx.fillRect(mx, my, mw, 8);
+    ctx.fillStyle = full ? (((s.frame >> 2) & 1) ? '#fff3a0' : '#ffb020') : (f.meter >= 50 ? '#6fe0ff' : '#3a78d0');
+    ctx.fillRect(mx, my, Math.round(mw * Math.min(100, f.meter) / 100), 8);
+    ctx.fillStyle = 'rgba(255,255,255,0.5)'; ctx.fillRect(mx + Math.round(mw / 2), my, 2, 8);
+    if (full) text(ctx, 'SUPER!', P.x + 64 + mw, P.y + 70, 8, '#ffe066', 'right', null);
+    // combo counter under the panel
     if (f.hits >= 2) {
       const pulse = f.lastHit && s.frame - f.lastHit < 8 ? 1 + (8 - (s.frame - f.lastHit)) * 0.03 : 1;
-      text(ctx, f.hits + ' HITS', left ? 24 : W - 24, 108, Math.round(20 * pulse / 4) * 4, '#ffe066', left ? 'left' : 'right');
+      text(ctx, f.hits + ' HITS  ' + Math.round(f.comboDmg) + '%', P.x + 6, P.y + P.h + 20, Math.round(10 * pulse / 2) * 2, '#ffe066', 'left');
     }
+  }
+
+  // fighters launched off-screen get a portrait bubble at the edge pointing their way
+  drawOffscreen(ctx, s) {
+    for (const f of s.fighters) {
+      if (f.st === 'dead' || f.st === 'spawn') continue;
+      const px = f.x, py = toScreenY(f.y) - 40;
+      if (px > -10 && px < W + 10 && py > -10 && py < H + 10) continue;
+      const bx = Math.max(34, Math.min(W - 34, px)), by = Math.max(110, Math.min(H - 40, py));
+      const C = CHARS[f.char], at = this.A.atlas[C.atlas], ic = at.frames.icon;
+      const col = this.col(f.i);
+      ctx.fillStyle = '#000'; ctx.fillRect(bx - 22, by - 22, 44, 44);
+      const iw = ic.w * at.scale, ih = ic.h * at.scale, isc = Math.min(1, 34 / Math.max(iw, ih));
+      ctx.drawImage(at.img, ic.x, ic.y, ic.w, ic.h, Math.round(bx - iw * isc / 2), Math.round(by - ih * isc / 2), Math.round(iw * isc), Math.round(ih * isc));
+      ctx.strokeStyle = col; ctx.lineWidth = 3; ctx.strokeRect(bx - 22, by - 22, 44, 44);
+      const dx = px - bx, dy = py - by, l = Math.hypot(dx, dy) || 1;
+      this.heart(ctx, bx + dx / l * 36 - 7, by + dy / l * 36 - 6, 2, col);
+    }
+  }
+
+  drawBall(ctx, b, s) {
+    const x = Math.round(b.x), gy = Math.round(toScreenY(b.y)), y = gy - 56 + Math.round(Math.sin(s.frame * 0.08) * 4);
+    ctx.fillStyle = 'rgba(0,0,0,0.3)'; ctx.beginPath(); ctx.ellipse(x, gy + 2, 20, 8, 0, 0, 7); ctx.fill();
+    const hue = (s.frame * 6) % 360, flash = b.fl > 0;
+    ctx.save();
+    for (let r = 3; r >= 1; r--) { ctx.globalAlpha = 0.12 * r; ctx.fillStyle = `hsl(${hue},100%,60%)`; ctx.beginPath(); ctx.arc(x, y, 22 + r * 7, 0, 7); ctx.fill(); }
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = flash ? '#fff' : `hsl(${hue},90%,55%)`; ctx.strokeStyle = '#000'; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.arc(x, y, 24, 0, 7); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = flash ? `hsl(${hue},100%,70%)` : '#fff';
+    ctx.beginPath(); ctx.arc(x, y, 14, 0, 7); ctx.fill();
+    // four-point star
+    ctx.fillStyle = '#000';
+    const a = (s.frame * 0.05) % 6.283;
+    ctx.beginPath();
+    for (let k = 0; k < 8; k++) { const rr = k % 2 ? 4 : 13, ang = a + k * Math.PI / 4; ctx.lineTo(x + Math.cos(ang) * rr, y + Math.sin(ang) * rr); }
+    ctx.closePath(); ctx.fill();
+    for (let k = 0; k < b.hp; k++) { ctx.fillStyle = '#fff'; ctx.strokeStyle = '#000'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(x - (b.hp - 1) * 7 + k * 14, y - 38, 4, 0, 7); ctx.fill(); ctx.stroke(); }
+    ctx.restore();
   }
 
   drawCutIn(ctx, s) {

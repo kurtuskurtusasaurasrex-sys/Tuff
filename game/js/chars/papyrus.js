@@ -8,6 +8,7 @@ export default {
   tag: 'Heavy brawler',
   blurb: 'The Great Papyrus! Big kicks, a ground-shaking stomp, electric orbs and a SPINNING charge.',
   atlas: 'papyrus',
+  quote: 'NYEH HEH HEH! THE GREAT PAPYRUS WILL DEFEAT YOU AND BECOME THE MOST POPULAR FIGHTER IN SNOWDIN!',
   color: '#e8541a', superName: 'SPECIAL ATTACK!', cutPose: 'cape1', cutFlip: false,
   stats: { power: 5, speed: 2, weight: 5, range: 3 },
   moveList: [

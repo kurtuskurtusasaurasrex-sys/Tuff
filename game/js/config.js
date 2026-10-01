@@ -12,7 +12,10 @@ export const ARENA = { x0: STAGE.x0, x1: STAGE.x1, y0: 0, y1: (STAGE.frontY - ST
 export const WALK = { mx: 20, top: 18, bot: 12 };      // how close to the slab edge a fighter can walk on their own
 export const LEDGE = { x: 8, y: 8 };                   // overhang a launched fighter survives before falling
 
-export const RULES = { stocks: 3, seconds: 120, introFrames: 110, fallFrames: 52, spawnFrames: 64 };
+export const RULES = { stocks: 3, seconds: 120, introFrames: 110, fallFrames: 52, spawnFrames: 64, maxPlayers: 4 };
+
+// An input word of exactly this value means "this player's controller was replaced by the CPU" (disconnect takeover).
+export const CPU_INPUT = 255;
 
 // The four controls: MOVE (4 direction bits count as one stick), ATTACK, SPECIAL, GUARD/DODGE.
 export const IN = { L: 1, R: 2, U: 4, D: 8, ATK: 16, SPC: 32, GRD: 64 };

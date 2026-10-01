@@ -1,18 +1,22 @@
-// Deterministic fight simulation. No DOM, no Math.random, no trig - only + - * / sqrt - so two browsers
-// running the same inputs produce bit-identical states (required for rollback netcode).
+// Deterministic fight simulation for 2-4 fighters (free-for-all). No DOM, no Math.random, no trig - only
+// + - * / sqrt and integer ops - so every browser running the same inputs produces bit-identical states
+// (required for rollback netcode). CPU fighters are driven by ai.js from state that lives inside this object.
 //
-// Public API:  createState(opts) -> state ;  step(state, [bits0, bits1]) ;  cloneState ; hashState
-// All of `state` is plain JSON-able data (numbers / strings / arrays / objects).
+// Public API:  createState(opts) -> state ;  step(state, inputs[]) ;  cloneState ; hashState
+// `state` is plain JSON-able data (numbers / strings / arrays / objects).
 
-import { ARENA, IN, RULES, WALK, LEDGE } from './config.js';
+import { ARENA, IN, RULES, WALK, LEDGE, CPU_INPUT } from './config.js';
 import { CHARS } from './chars/index.js';
+import { STAGES } from './stages.js';
+import { aiBits, newAi, nearestFoe } from './ai.js';
 
 const BUF = 8;               // input buffer (frames)
 const PARRY = 6;             // perfect-guard window (frames after raising guard)
 const LAUNCH_SPEED = 7.5;    // knockback speed above which a hit launches instead of flinching
 const DODGE_FRAMES = 22;
 const SQ2 = 0.7071067811865476;
-const VKB = 0.5;              // depth is shallower than the arena is wide, so launches along it are damped
+const VKB = 0.5;             // depth is shallower than the arena is wide, so launches along it are damped
+const BALL_HP = 3, BALL_R = 26;
 
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 function norm(x, y, fx, fy) {
@@ -26,39 +30,53 @@ function segDist2(x1, y1, x2, y2, px, py) {
   const cx = x1 + dx * t - px, cy = y1 + dy * t - py;
   return cx * cx + cy * cy;
 }
+function rand(s) {                       // mulberry32 on s.rng
+  let t = (s.rng = (s.rng + 0x6D2B79F5) | 0);
+  t = Math.imul(t ^ (t >>> 15), t | 1);
+  t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+}
 
 // ------------------------------------------------------------------------------------------ setup
-export function createState({ seed = 1, chars = ['sans', 'papyrus'], stocks = RULES.stocks, seconds = RULES.seconds } = {}) {
+// opts.cpu: array of 0/1 per fighter, opts.lvl: CPU level per fighter (0 easy .. 2 hard)
+export function createState({ seed = 1, chars = ['sans', 'papyrus'], stocks = RULES.stocks, seconds = RULES.seconds, stage = 'snowdin', cpu = [], lvl = [] } = {}) {
+  const n = Math.max(2, Math.min(RULES.maxPlayers, chars.length));
+  const st = STAGES[stage] || STAGES.snowdin;
   const s = {
     frame: 0, rng: (seed | 0) || 1, phase: 'intro', phaseT: 0, timer: seconds * 60, hitstop: 0, cut: null,
-    winner: -1, reason: '', fighters: [], projs: [], ev: [], nid: 1,
+    winner: -1, reason: '', rank: [], n, stage: st.id, fighters: [], projs: [], ev: [], nid: 1, outN: 0,
+    ball: null, ballT: 60 * 14, hazT: 60 * 10, koX: 0, koY: 0,
   };
-  s.fighters.push(newFighter(0, chars[0], stocks));
-  s.fighters.push(newFighter(1, chars[1], stocks));
+  for (let i = 0; i < n; i++) s.fighters.push(newFighter(i, n, chars[i], stocks, cpu[i] ? 1 : 0, lvl[i] === undefined ? 1 : lvl[i], seed));
   return s;
 }
 
-function spawnPoint(i) {
-  const w = ARENA.x1 - ARENA.x0;
-  return [ARENA.x0 + w * (i === 0 ? 0.3 : 0.7), (ARENA.y1 - ARENA.y0) / 2];
+const SP_X = { 2: [0.3, 0.7], 3: [0.2, 0.5, 0.8], 4: [0.14, 0.38, 0.62, 0.86] };
+const SP_Y = { 2: [0.5, 0.5], 3: [0.5, 0.3, 0.5], 4: [0.35, 0.65, 0.35, 0.65] };
+export function spawnPoint(i, n) {
+  const w = ARENA.x1 - ARENA.x0, h = ARENA.y1 - ARENA.y0;
+  return [ARENA.x0 + w * SP_X[n][i], ARENA.y0 + h * SP_Y[n][i]];
 }
 
-function newFighter(i, char, stocks) {
-  const [x, y] = spawnPoint(i);
+function newFighter(i, n, char, stocks, cpu, lvl, seed) {
+  const [x, y] = spawnPoint(i, n);
+  const face = x < (ARENA.x0 + ARENA.x1) / 2 ? 1 : -1;
   return {
-    i, char, x, y, vx: 0, vy: 0, face: i === 0 ? 1 : -1,
+    i, char, x, y, vx: 0, vy: 0, face, cpu, lvl,
     st: 'idle', sf: 0, stun: 0, inv: 0,
     dmg: 0, stocks, meter: 0, gd: 100, gdT: 0, dcd: 0, brk: 0, dx: 0, dy: 0,
-    mv: '', mf: 0, maimx: i === 0 ? 1 : -1, maimy: 0, hitMask: 0, connected: 0, chain: 0,
+    mv: '', mf: 0, maimx: face, maimy: 0, hitMask: 0, ballMask: 0, connected: 0, chain: 0,
     in: 0, pr: 0, sx: 0, sy: 0, bAtk: 0, bSpc: 0, bGrd: 0,
-    combo: 0, hits: 0, hitsT: 0, lastHit: 0,
+    combo: 0, hits: 0, hitsT: 0, lastHit: 0, comboDmg: 0, out: 0, kos: 0, falls: 0, best: 0,
+    lastAtk: -1,
+    ai: newAi((Math.imul(seed | 0, 2654435761 | 0) + i * 40503 + 17) >>> 0),
   };
 }
 
 export const cloneState = (s) => structuredClone(s);
 
 export function hashState(s) {
-  const str = JSON.stringify([s.frame, s.rng, s.phase, s.phaseT, s.timer, s.hitstop, s.winner, s.fighters, s.projs]);
+  const str = JSON.stringify([s.frame, s.rng, s.phase, s.phaseT, s.timer, s.hitstop, s.winner, s.ball, s.ballT, s.hazT, s.fighters, s.projs]);
   let h = 0x811c9dc5;
   for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 0x01000193); }
   return h >>> 0;
@@ -67,7 +85,13 @@ export function hashState(s) {
 // ------------------------------------------------------------------------------------------ main step
 export function step(s, inputs) {
   s.ev = [];
-  for (let i = 0; i < 2; i++) readInput(s.fighters[i], inputs[i] | 0);
+  for (let i = 0; i < s.n; i++) {
+    const f = s.fighters[i];
+    let bits = inputs[i] | 0;
+    if (bits === CPU_INPUT && !f.cpu) { f.cpu = 1; f.lvl = 1; }            // a disconnected human is replaced by a CPU
+    if (f.cpu) bits = aiBits(s, f);
+    readInput(f, bits);
+  }
 
   if (s.hitstop > 0) {                       // impact freeze (also used for the Super cut-in)
     s.hitstop--;
@@ -84,7 +108,7 @@ export function step(s, inputs) {
     if (s.phaseT >= RULES.introFrames) { s.phase = 'fight'; s.phaseT = 0; }
   } else if (s.phase === 'fight') {
     s.phaseT++;
-    if (--s.timer <= 0) { s.timer = 0; timeUp(s); }
+    if (--s.timer <= 0) { s.timer = 0; s.ev.push({ t: 'time' }); endMatch(s, 'time'); }
     simulate(s, true);
   } else {
     s.phaseT++;
@@ -94,11 +118,9 @@ export function step(s, inputs) {
 }
 
 function simulate(s, live) {
-  const [a, b] = s.fighters;
-  updateFighter(s, a, b, live);
-  updateFighter(s, b, a, live);
+  for (const f of s.fighters) updateFighter(s, f, nearestFoe(s, f) || f, live);
   updateProjs(s);
-  if (live) resolveHits(s);
+  if (live) { ballTick(s); hazardTick(s); resolveHits(s); }
   separate(s);
 }
 
@@ -121,7 +143,7 @@ function updateFighter(s, f, o, live) {
   if (f.bSpc > 0) f.bSpc--;
   if (f.bGrd > 0) f.bGrd--;
   if (f.dcd > 0) f.dcd--;
-  if (f.hitsT > 0 && --f.hitsT === 0) f.hits = 0;
+  if (f.hitsT > 0 && --f.hitsT === 0) { f.hits = 0; f.comboDmg = 0; }
   if (f.meter < 100) f.meter = Math.min(100, f.meter + 0.015);
   if (f.st !== 'guard' && f.gd < 100) f.gd = Math.min(100, f.gd + 0.35);
   if (!live) { f.bAtk = 0; f.bSpc = 0; f.bGrd = 0; f.sx = 0; f.sy = 0; }
@@ -146,6 +168,8 @@ function keepIn(f, rate) {
   f.y += clamp(ty - f.y, -rate, rate);
 }
 
+const ice = (s) => (STAGES[s.stage] || STAGES.snowdin).ice;
+
 function actionable(s, f, o, C, live) {
   const moving = f.sx !== 0 || f.sy !== 0;
   if (f.bGrd > 0 || (f.in & IN.GRD)) {
@@ -159,7 +183,8 @@ function actionable(s, f, o, C, live) {
   }
   if (f.bAtk > 0) { f.bAtk = 0; return startAttack(s, f, o, C); }
 
-  const sp = C.speed;
+  const sp = C.speed, slip = ice(s);
+  const acc = slip ? (moving ? 0.1 : 0.04) : 0.45;
   let tx = 0, ty = 0;
   if (moving) {
     const k = (f.sx !== 0 && f.sy !== 0) ? SQ2 : 1;
@@ -170,10 +195,10 @@ function actionable(s, f, o, C, live) {
     f.st = 'idle';
     if (Math.abs(o.x - f.x) > 10) f.face = o.x > f.x ? 1 : -1;
   }
-  f.vx += (tx - f.vx) * 0.45; f.vy += (ty - f.vy) * 0.45;
+  f.vx += (tx - f.vx) * acc; f.vy += (ty - f.vy) * acc;
   if (!moving && Math.abs(f.vx) < 0.05 && Math.abs(f.vy) < 0.05) { f.vx = 0; f.vy = 0; }
   f.x += f.vx; f.y += f.vy;
-  keepIn(f, 4);
+  keepIn(f, slip ? 6 : 4);
 }
 
 function startGuard(f) { f.st = 'guard'; f.gdT = 0; f.sf = 0; }
@@ -221,7 +246,8 @@ function doStun(s, f, o, C) {
     return;
   }
   f.stun--;
-  const fr = f.st === 'launch' ? 0.945 : f.st === 'hurt' ? 0.86 : 0.8;
+  const slip = ice(s);
+  const fr = f.st === 'launch' ? (slip ? 0.972 : 0.945) : f.st === 'hurt' ? (slip ? 0.93 : 0.86) : 0.8;
   f.vx *= fr; f.vy *= fr;
   f.x += f.vx; f.y += f.vy;
   if (f.st !== 'gbreak') {
@@ -235,9 +261,11 @@ function outside(f) {
 }
 
 function startFall(s, f) {
-  f.st = 'fall'; f.sf = 0; f.stocks--; f.combo = 0; f.mv = '';
+  f.st = 'fall'; f.sf = 0; f.stocks--; f.combo = 0; f.mv = ''; f.falls++;
   s.hitstop = Math.max(s.hitstop, 16);
-  s.ev.push({ t: 'ko', i: f.i, x: f.x, y: f.y, dx: f.vx, dy: f.vy });
+  s.koX = f.x; s.koY = f.y;
+  if (f.lastAtk >= 0 && s.fighters[f.lastAtk] && f.lastAtk !== f.i) s.fighters[f.lastAtk].kos++;
+  s.ev.push({ t: 'ko', i: f.i, x: f.x, y: f.y, dx: f.vx, dy: f.vy, left: f.stocks });
 }
 
 function doFall(s, f) {
@@ -245,13 +273,13 @@ function doFall(s, f) {
   f.vx *= 1.012; f.vy *= 1.012;
   if (f.sf < RULES.fallFrames) return;
   if (f.stocks > 0) {
-    const [x, y] = spawnPoint(f.i);
-    f.x = x; f.y = y; f.vx = 0; f.vy = 0; f.dmg = 0; f.gd = 100; f.meter = Math.min(100, f.meter + 15);
+    const [x, y] = spawnPoint(f.i, s.n);
+    f.x = x; f.y = y; f.vx = 0; f.vy = 0; f.dmg = 0; f.gd = 100; f.meter = Math.min(100, f.meter + 15); f.lastAtk = -1;
     f.st = 'spawn'; f.sf = 0; f.inv = RULES.spawnFrames + 90; f.stun = 0;
     s.ev.push({ t: 'spawn', i: f.i, x, y });
   } else {
-    f.st = 'dead'; f.sf = 0;
-    endMatch(s, 'ko');
+    f.st = 'dead'; f.sf = 0; f.out = ++s.outN;
+    if (s.fighters.filter((g) => g.stocks > 0).length <= 1) endMatch(s, 'ko');
   }
 }
 
@@ -278,7 +306,7 @@ function startSpecial(s, f, o, C) {
 function beginMove(s, f, C, key, aim) {
   const spec = C.moves[key];
   f.st = 'atk'; f.mv = key; f.mf = 0; f.sf = 0;
-  f.maimx = aim[0]; f.maimy = aim[1]; f.hitMask = 0; f.connected = 0;
+  f.maimx = aim[0]; f.maimy = aim[1]; f.hitMask = 0; f.ballMask = 0; f.connected = 0;
   if (Math.abs(aim[0]) > 0.25) f.face = aim[0] > 0 ? 1 : -1;
   if (f.inv > 0 && key !== 'super') f.inv = Math.min(f.inv, 20);     // acting ends spawn protection
   s.ev.push({ t: 'swing', i: f.i, mv: key, x: f.x, y: f.y });
@@ -313,14 +341,14 @@ function doMove(s, f, o, C) {
     const k = 1 - 0.5 * (mf - spec.spin.f0) / (spec.spin.f1 - spec.spin.f0);
     mvx = f.maimx * spec.spin.speed * k; mvy = f.maimy * spec.spin.speed * k; driven = true;
   }
-  if (driven) { f.vx = mvx; f.vy = mvy; } else { f.vx *= 0.7; f.vy *= 0.7; }
+  if (driven) { f.vx = mvx; f.vy = mvy; } else { f.vx *= ice(s) ? 0.92 : 0.7; f.vy *= ice(s) ? 0.92 : 0.7; }
   f.x += f.vx; f.y += f.vy; keepIn(f, 99);
 
   if (mf >= spec.len) { f.st = 'idle'; f.mv = ''; f.sf = 0; f.chain = 0; }
 }
 
 function spawnProj(s, p) {
-  p.id = s.nid++; p.t = 0; p.hit = [];
+  p.id = s.nid++; p.t = 0; p.hit = []; p.bhit = 0;
   s.projs.push(p);
   return p;
 }
@@ -339,7 +367,7 @@ function doEvent(s, f, o, e) {
       s.ev.push({ t: 'blaster', i: f.i, x, y, dx: ax, dy: ay, warm: e.warm });
       break;
     }
-    case 'ring': {
+    case 'ring': {                                   // blasters surround the nearest foe
       const D = [[SQ2, SQ2], [-SQ2, SQ2], [-SQ2, -SQ2], [SQ2, -SQ2]];
       for (let k = 0; k < e.n; k++) {
         const x = o.x + D[k][0] * e.dist, y = o.y + D[k][1] * e.dist;
@@ -391,6 +419,49 @@ function updateProjs(s) {
   if (s.projs.some((p) => p.dead)) s.projs = s.projs.filter((p) => !p.dead);
 }
 
+// ------------------------------------------------------------------------------------------ items + stage hazards
+function ballTick(s) {
+  const b = s.ball;
+  if (!b) {
+    if (--s.ballT <= 0 && s.fighters.filter((f) => f.stocks > 0).length >= 2) {
+      const w = ARENA.x1 - ARENA.x0;
+      s.ball = { x: ARENA.x0 + w * (0.25 + 0.5 * rand(s)), y: (ARENA.y1 - ARENA.y0) * (0.3 + 0.4 * rand(s)), vx: (rand(s) - 0.5) * 2.4, vy: (rand(s) - 0.5) * 1.2, hp: BALL_HP, t: 0, fl: 0 };
+      s.ev.push({ t: 'ballspawn', x: s.ball.x, y: s.ball.y });
+    }
+    return;
+  }
+  b.t++;
+  if (b.fl > 0) b.fl--;
+  b.x += b.vx; b.y += b.vy;
+  if (b.x < ARENA.x0 + 40) { b.x = ARENA.x0 + 40; b.vx = -b.vx; } else if (b.x > ARENA.x1 - 40) { b.x = ARENA.x1 - 40; b.vx = -b.vx; }
+  if (b.y < 40) { b.y = 40; b.vy = -b.vy; } else if (b.y > ARENA.y1 - 40) { b.y = ARENA.y1 - 40; b.vy = -b.vy; }
+  if (b.t > 60 * 22) { s.ev.push({ t: 'ballgone', x: b.x, y: b.y }); s.ball = null; s.ballT = 60 * (16 + (rand(s) * 12 | 0)); }
+}
+
+function ballHit(s, atk, dir) {
+  const b = s.ball; if (!b) return;
+  b.hp--; b.fl = 10; b.vx += dir[0] * 1.2; b.vy += dir[1] * 0.6;
+  s.hitstop = Math.max(s.hitstop, 3);
+  if (b.hp > 0) { s.ev.push({ t: 'ballhit', x: b.x, y: b.y, hp: b.hp }); return; }
+  s.ev.push({ t: 'ballbreak', x: b.x, y: b.y, i: atk });
+  if (atk >= 0 && s.fighters[atk]) s.fighters[atk].meter = 100;
+  s.ball = null; s.ballT = 60 * (18 + (rand(s) * 14 | 0));
+}
+
+function hazardTick(s) {
+  const st = STAGES[s.stage];
+  if (!st || st.hazard !== 'bones') return;
+  if (--s.hazT > 0) return;
+  s.hazT = 60 * (7 + (rand(s) * 5 | 0));
+  const n = 3;
+  for (let k = 0; k < n; k++) {
+    const x = ARENA.x0 + 60 + (ARENA.x1 - ARENA.x0 - 120) * rand(s), y = 30 + (ARENA.y1 - 60) * rand(s);
+    spawnProj(s, { o: -1, k: 'burst', x, y, vx: 0, vy: 0, dx: 0, dy: 1, r: 30, a0: 55, a1: 69, life: 77, spr: 'bone',
+      h: { dmg: 6, kb: 8, kbs: 0.06, stun: 24, hs: 6, gd: 20, ang: 'away', fx: 'bone' } });
+  }
+  s.ev.push({ t: 'hazard', kind: 'bones' });
+}
+
 // ------------------------------------------------------------------------------------------ hits
 function resolveHits(s) {
   const cand = [];
@@ -399,53 +470,70 @@ function resolveHits(s) {
     const spec = CHARS[A.char].moves[A.mv];
     if (!spec.hits) continue;
     for (const h of spec.hits) {
-      if (A.mf < h.f0 || A.mf >= h.f1 || (A.hitMask & (1 << h.g))) continue;
+      if (A.mf < h.f0 || A.mf >= h.f1) continue;
       const cx = A.x + A.maimx * h.reach, cy = A.y + A.maimy * h.reach;
-      cand.push({ atk: A.i, tgt: 1 - A.i, h, x1: cx, y1: cy, x2: cx + A.maimx * h.len, y2: cy + A.maimy * h.len, r: h.r,
+      cand.push({ atk: A.i, h, x1: cx, y1: cy, x2: cx + A.maimx * h.len, y2: cy + A.maimy * h.len, r: h.r,
         ax: A.maimx, ay: A.maimy, ox: A.x, oy: A.y, g: h.g, p: null });
     }
   }
   for (const p of s.projs) {
     if (p.t < p.a0 || p.t >= p.a1) continue;
-    const tgt = 1 - p.o;
-    if (p.hit.indexOf(tgt) >= 0) continue;
     let x1 = p.x, y1 = p.y, x2 = p.x, y2 = p.y;
     if (p.k === 'beam') { x1 = p.x + p.dx * p.mo; y1 = p.y + p.dy * p.mo; x2 = x1 + p.dx * p.bl; y2 = y1 + p.dy * p.bl; }
-    cand.push({ atk: p.o, tgt, h: p.h, x1, y1, x2, y2, r: p.r, ax: p.dx, ay: p.dy, ox: x1, oy: y1, g: -1, p });
+    cand.push({ atk: p.o, h: p.h, x1, y1, x2, y2, r: p.r, ax: p.dx, ay: p.dy, ox: x1, oy: y1, g: -1, p });
   }
+
   const landed = [];
   for (const c of cand) {
-    const T = s.fighters[c.tgt];
-    if (T.inv > 0 || T.st === 'fall' || T.st === 'spawn' || T.st === 'dead' || T.st === 'win') continue;
-    const hr = CHARS[T.char].hr + c.r;
-    if (segDist2(c.x1, c.y1, c.x2, c.y2, T.x, T.y) > hr * hr) continue;
-    if (c.g >= 0) s.fighters[c.atk].hitMask |= (1 << c.g);
-    else { c.p.hit.push(c.tgt); if (c.p.once) c.p.life = c.p.t + 1; }
-    landed.push(c);
+    const A = c.atk >= 0 ? s.fighters[c.atk] : null;
+    for (const T of s.fighters) {
+      if (T.i === c.atk) continue;
+      if (c.g >= 0) { if (A.hitMask & (1 << (c.g + 8 * T.i))) continue; }
+      else if (c.p.hit.indexOf(T.i) >= 0) continue;
+      if (T.inv > 0 || T.st === 'fall' || T.st === 'spawn' || T.st === 'dead' || T.st === 'win') continue;
+      const hr = CHARS[T.char].hr + c.r;
+      if (segDist2(c.x1, c.y1, c.x2, c.y2, T.x, T.y) > hr * hr) continue;
+      landed.push({ c, tgt: T.i });
+    }
+    // the Smash Ball is a target too
+    if (s.ball && c.atk >= 0) {
+      const fresh = c.g >= 0 ? !(A.ballMask & (1 << c.g)) : !c.p.bhit;
+      const br = BALL_R + c.r;
+      if (fresh && segDist2(c.x1, c.y1, c.x2, c.y2, s.ball.x, s.ball.y) <= br * br) {
+        if (c.g >= 0) A.ballMask |= (1 << c.g); else c.p.bhit = 1;
+        ballHit(s, c.atk, [c.ax, c.ay]);
+        if (c.p && c.p.once) c.p.life = c.p.t + 1;
+      }
+    }
   }
-  for (const c of landed) applyHit(s, c);
+  for (const l of landed) {                 // mark after detection so one swing can hit several fighters on the same frame
+    const c = l.c;
+    if (c.g >= 0) s.fighters[c.atk].hitMask |= (1 << (c.g + 8 * l.tgt));
+    else { c.p.hit.push(l.tgt); if (c.p.once) c.p.life = c.p.t + 1; }
+  }
+  for (const l of landed) applyHit(s, l.c, l.tgt);
 }
 
-function applyHit(s, c) {
-  const T = s.fighters[c.tgt], A = s.fighters[c.atk], h = c.h;
+function applyHit(s, c, tgt) {
+  const T = s.fighters[tgt], A = c.atk >= 0 ? s.fighters[c.atk] : null, h = c.h;
   const away = norm(T.x - c.ox, T.y - c.oy, c.ax, c.ay);
   let kx, ky;
   if (h.ang === 'aim') { kx = c.ax; ky = c.ay; }
   else if (h.ang === 'away') { kx = away[0]; ky = away[1]; }
   else { [kx, ky] = norm(c.ax * 0.6 + away[0] * 0.4, c.ay * 0.6 + away[1] * 0.4, c.ax, c.ay); }
-  A.connected = 1;
+  if (A) A.connected = 1;
 
   if (T.st === 'guard') {
     if (T.gdT <= PARRY) {                                   // perfect guard: attacker is staggered
       T.meter = Math.min(100, T.meter + 10); T.gd = Math.min(100, T.gd + 12);
-      if (c.atk !== c.tgt && A.st !== 'fall') { A.st = 'hurt'; A.sf = 0; A.stun = 26; A.mv = ''; A.vx = -kx * 2.5; A.vy = -ky * 2.5; }
+      if (A && A.st !== 'fall') { A.st = 'hurt'; A.sf = 0; A.stun = 26; A.mv = ''; A.vx = -kx * 2.5; A.vy = -ky * 2.5; }
       s.hitstop = Math.max(s.hitstop, 12);
       s.ev.push({ t: 'parry', i: T.i, x: T.x, y: T.y });
       return;
     }
     T.gd -= h.gd; T.dmg = Math.min(999, T.dmg + h.dmg * 0.1);
     T.vx = kx * h.kb * 0.35; T.vy = ky * h.kb * 0.35 * VKB;
-    T.meter = Math.min(100, T.meter + 3); A.meter = Math.min(100, A.meter + 3);
+    T.meter = Math.min(100, T.meter + 3); if (A) A.meter = Math.min(100, A.meter + 3);
     s.hitstop = Math.max(s.hitstop, 4);
     s.ev.push({ t: 'block', i: T.i, x: T.x, y: T.y, dx: kx, dy: ky });
     if (T.gd <= 0) { T.gd = 0; T.st = 'gbreak'; T.sf = 0; T.stun = 100; s.ev.push({ t: 'gbreak', i: T.i, x: T.x, y: T.y }); }
@@ -456,9 +544,12 @@ function applyHit(s, c) {
   const dmg = h.dmg * scale;
   T.dmg = Math.min(999, T.dmg + dmg);
   const speed = (h.kb + h.kbs * T.dmg) / CHARS[T.char].weight;
-  A.meter = Math.min(100, A.meter + dmg * 1.3 + 1.5);
+  if (A) {
+    A.meter = Math.min(100, A.meter + dmg * 1.3 + 1.5);
+    A.hits++; A.hitsT = 100; A.lastHit = s.frame; A.comboDmg += dmg; if (A.hits > A.best) A.best = A.hits;
+  }
   T.meter = Math.min(100, T.meter + dmg * 0.8);
-  A.hits++; A.hitsT = 100; A.lastHit = s.frame;
+  T.lastAtk = c.atk;
   T.combo++;
   T.mv = ''; T.vx = kx * speed; T.vy = ky * speed * VKB;
   T.st = speed >= LAUNCH_SPEED ? 'launch' : 'hurt';
@@ -471,40 +562,50 @@ function applyHit(s, c) {
 
 // ------------------------------------------------------------------------------------------ misc
 function separate(s) {
-  const [a, b] = s.fighters;
   const ok = (f) => f.st === 'idle' || f.st === 'walk' || f.st === 'guard' || f.st === 'atk' || f.st === 'gbreak';
-  if (!ok(a) || !ok(b)) return;
-  const min = CHARS[a.char].hr + CHARS[b.char].hr;
-  let dx = b.x - a.x, dy = b.y - a.y;
-  const d = Math.sqrt(dx * dx + dy * dy);
-  if (d >= min) return;
-  if (d < 1e-4) { dx = 1; dy = 0; } else { dx /= d; dy /= d; }
-  const push = (min - d) / 2;
-  a.x -= dx * push; a.y -= dy * push; b.x += dx * push; b.y += dy * push;
-  keepIn(a, 99); keepIn(b, 99);
+  const F = s.fighters;
+  for (let i = 0; i < F.length; i++) for (let j = i + 1; j < F.length; j++) {
+    const a = F[i], b = F[j];
+    if (!ok(a) || !ok(b)) continue;
+    const min = CHARS[a.char].hr + CHARS[b.char].hr;
+    let dx = b.x - a.x, dy = b.y - a.y;
+    const d = Math.sqrt(dx * dx + dy * dy);
+    if (d >= min) continue;
+    if (d < 1e-4) { dx = 1; dy = 0; } else { dx /= d; dy /= d; }
+    const push = (min - d) / 2;
+    a.x -= dx * push; a.y -= dy * push; b.x += dx * push; b.y += dy * push;
+    keepIn(a, 99); keepIn(b, 99);
+  }
 }
 
-function timeUp(s) {
-  s.ev.push({ t: 'time' });
-  endMatch(s, 'time');
+// best-to-worst finishing order: survivors by stocks then lowest damage, then the eliminated, latest-out first
+function standings(s) {
+  const key = (f) => (f.stocks > 0 ? [1, f.stocks, -Math.floor(f.dmg)] : [0, f.out, 0]);
+  return s.fighters.map((f) => f.i).sort((a, b) => {
+    const ka = key(s.fighters[a]), kb = key(s.fighters[b]);
+    for (let k = 0; k < 3; k++) if (ka[k] !== kb[k]) return kb[k] - ka[k];
+    return a - b;
+  });
 }
 
 function endMatch(s, reason) {
   if (s.phase === 'over') return;
-  const [a, b] = s.fighters;
-  let w = -1;
-  if (reason === 'ko') {
-    if (a.stocks > 0 && b.stocks <= 0) w = 0; else if (b.stocks > 0 && a.stocks <= 0) w = 1;
-  } else if (a.stocks !== b.stocks) w = a.stocks > b.stocks ? 0 : 1;
-  else if (a.dmg !== b.dmg) w = a.dmg < b.dmg ? 0 : 1;
-  s.phase = 'over'; s.phaseT = 0; s.winner = w; s.reason = reason;
+  const rank = standings(s);
+  let w = rank[0];
+  const alive = s.fighters.filter((f) => f.stocks > 0);
+  if (reason === 'ko') { if (alive.length !== 1) w = -1; }
+  else if (rank.length > 1) {                                     // time-up: a dead heat at the top is a draw
+    const a = s.fighters[rank[0]], b = s.fighters[rank[1]];
+    if (a.stocks === b.stocks && Math.floor(a.dmg) === Math.floor(b.dmg)) w = -1;
+  }
+  s.phase = 'over'; s.phaseT = 0; s.winner = w; s.reason = reason; s.rank = rank;
   for (const f of s.fighters) {
     if (f.i === w) { f.st = 'win'; f.sf = 0; f.mv = ''; f.inv = 9999; }
-    else if (f.st === 'fall' && f.stocks > 0) { const [x, y] = spawnPoint(f.i); f.x = x; f.y = y; f.st = 'idle'; f.vx = 0; f.vy = 0; }
+    else if (f.st === 'fall' && f.stocks > 0) { const [x, y] = spawnPoint(f.i, s.n); f.x = x; f.y = y; f.st = 'idle'; f.vx = 0; f.vy = 0; }
   }
-  s.ev.push({ t: 'end', winner: w, reason });
+  s.ev.push({ t: 'end', winner: w, reason, rank });
 }
 
 // helpers for UI / AI
 export const isActionable = (f) => f.st === 'idle' || f.st === 'walk';
-export { PARRY, LAUNCH_SPEED };
+export { PARRY, LAUNCH_SPEED, nearestFoe };
